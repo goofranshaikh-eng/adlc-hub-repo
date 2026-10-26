@@ -50,4 +50,17 @@ When FastAPI submits a user question to `POST /agent/query`, the agent accepts i
 - A second subscriber for the same `agent_run_id` may attach; the agent does not cancel the background job when a subscriber disconnects.
 - Auth is out of scope, consistent with [PER-20](https://linear.app/personalgs/issue/PER-20/integrate-agent-with-mcp-server).
 - Tool names, id normalization, `MCP_URL`, and existing endpoints remain unchanged.
+- Pydantic validation errors (HTTP 422 for missing or non-string `query`) are caught by a custom exception handler and converted to HTTP 200 `{"status": "rejected", "agent_run_id": "<id>", "reason": "invalid query"}` before the handler body executes.
+
+## Verify
+
+**Test Count:** 32 tests across 3 stories (8 + 15 + 9)
+
+**Story 1 (AC-1, AC-2):** 8 tests verify immediate accept, rejection (including Pydantic validation and empty/whitespace query), no LLM/MCP calls on invalid input, and agent_run_id consistency in run store.
+
+**Story 2 (AC-3, AC-4, AC-5):** 15 tests verify SSE stream delivery with correct run_id, 5-second hold timing for fast/slow answers, immediate failure events, and stream closure.
+
+**Story 3 (AC-6):** 9 tests verify existing POST /query and GET /health remain unchanged, no latency regression, MCP process isolation, tool names, and configuration stability.
+
+All tests are listed in `stories/01-agent.md`, `stories/02-agent.md`, and `stories/03-agent.md`.
 ```

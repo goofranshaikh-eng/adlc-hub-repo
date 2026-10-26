@@ -1,61 +1,64 @@
 FAIL
 
-## Mismatches Found
+**Concrete mismatches:**
 
-1. **AC count consistency:** Ticket lists 6 ACs; proposed_tickets.md assigns only AC-1, AC-2 to ticket 1; AC-3, AC-4, AC-5 to ticket 2; AC-6 to ticket 3. Breakdown confirms this distribution. **PASS on count alignment.**
+1. **File paths in breakdown.md and stories conflict with change_requests.md:**
+   - breakdown.md specifies: `agent/src/agent/routes.py`, `agent/src/routes/agent.py`
+   - change_requests.md directive: "Do not add agent/src/agent/routes.py or agent/src/routes/agent.py. Use that one path in the specs, breakdown, and stories."
+   - All route handlers must be in `agent/src/main.py` per change_requests.md, but breakdown.md and stories still reference separate routes files.
 
-2. **Test count consistency:** Breakdown specifies 32 total tests (8 + 15 + 9). Stories 01-agent.md lists 8 tests matching breakdown. Stories 02-agent.md lists 15 tests matching breakdown. Stories 03-agent.md lists 9 tests matching breakdown. **PASS on test alignment.**
+2. **stories/01-agent.md, 02-agent.md, 03-agent.md file paths inconsistent:**
+   - stories/01-agent.md specifies new file `agent/src/agent/models.py` (OK).
+   - stories/01-agent.md specifies modified file `agent/src/main.py` with POST /agent/query handler (OK).
+   - But stories/02-agent.md specifies new file `agent/src/agent/sse_handler.py` and `agent/src/agent/background_task.py` with GET route handler in `agent/src/main.py` (OK).
+   - However, the interface in stories/02-agent.md shows background_task spawn signature includes `run_store: "RunStore"` parameter, but stories/01-agent.md shows spawn signature takes only `(agent_run_id, query)` without run_store—**AC mismatch on function signature**.
 
-3. **File paths:** Breakdown and all specs/ and stories/ files reference consistent paths:
-   - `agent/src/agent/models.py`
-   - `agent/src/agent/run_store.py`
-   - `agent/src/agent/orchestrator.py`
-   - `agent/src/agent/routes.py`
-   - `agent/src/agent/sse_handler.py`
-   - `agent/src/agent/background_task.py`
-   - `agent/src/main.py`
-   - `agent/tests/test_agent_query_accept.py`
-   - `agent/tests/test_agent_sse_stream.py`
-   - `agent/tests/test_backward_compat.py`
-   
-   All paths align across breakdown, specs, and stories. Repo context confirms `agent` repo exists at `/home/goos/projects/adlc-agents` with `README.md` present. **PASS on file paths.**
+3. **Run store method implementation inconsistency:**
+   - stories/01-agent.md line "File Plan" shows `agent/src/agent/run_store.py` created in Story 1.
+   - stories/02-agent.md shows `agent/src/agent/run_store.py` extended in Story 2 with `enqueue_event()` and `cleanup_expired()`.
+   - But specs/1.md shows run_store.enqueue_event() and mark_failed() called in Story 1 acceptance path, yet these methods are not implemented in the Story 1 interfaces—**they are deferred to Story 2, violating AC-1 and AC-2 verification** (Events must be enqueued synchronously on rejection before POST returns, per AC-2 spec).
 
-4. **HLD outcome vs. LLD alignment:** HLD describes output formats (e.g., "HTTP 200 `{"status": "ok", "agent_run_id": "..."}`, SSE event format `event: <type>\ndata: <json>\n\n`"). Specs 1, 2, 3 preserve these outcomes without prescribing language-specific syntax; they reference Pydantic models and `asyncio` constructs appropriate to Python/FastAPI repo context. Stories reference the same outcomes. **PASS on HLD↔LLD alignment.**
+4. **Acceptance Criteria mapping in breakdown differs from test count:**
+   - breakdown.md states AC-1 requires 2 tests, AC-2 requires 6 tests (total 8 for Story 1).
+   - stories/01-agent.md Tests section lists 8 tests numbered 1–8, matching the count (OK).
+   - But Test 8 in stories/01-agent.md verifies "agent_run_id consistent in SSE stream"—this is a Story 2 concern (SSE delivery), not Story 1 (immediate accept). **AC-1 and AC-2 do not require SSE stream verification; that is AC-3 scope.**
 
-5. **Specs/ files for child tickets:** Proposed_tickets.md lists 3 child tickets (1, 2, 3). Specs directory contains:
-   - `specs/1.md` (Ticket 1: AC-1, AC-2)
-   - `specs/2.md` (Ticket 2: AC-3, AC-4, AC-5)
-   - `specs/3.md` (Ticket 3: AC-6)
-   
-   All three present. **PASS on specs coverage.**
+5. **Change_requests.md directive not applied to specs files:**
+   - specs/1.md, specs/2.md, specs/3.md still reference `agent/src/routes/agent.py` and separate routes modules.
+   - Should reference only `agent/src/main.py` per change_requests.md.
+   - specs/PER-43.md, specs/PER-44.md, specs/PER-45.md also reference separate routes files or do not lock routes to main.py.
 
-6. **Merged_plan.md:** Not present; project is new (only README.md in repo-tree). No prior merged_plan.md to check order gaps. **PASS (N/A).**
+6. **Pydantic model validation mismatch:**
+   - specs/1.md and stories/01-agent.md define `AgentQueryRequest(BaseModel)` with `query: str = Field(..., min_length=1)`.
+   - FastAPI will auto-reject missing or non-string `query` at HTTP 422 (Pydantic validation layer).
+   - But AC-1 and AC-2 require HTTP 200 responses, never 422.
+   - **Solution required:** Custom exception handler or wrapper to convert 422 to 200 rejected response, but this is not documented in any spec or story. **Incomplete implementation contract.**
 
-7. **Change_requests.md:** Not referenced in inputs; no prior artifact to validate against. **PASS (N/A).**
+7. **Background task spawn in Story 1 incomplete:**
+   - stories/01-agent.md shows `asyncio.create_task(spawn_background_job(run.id, query, run_store))` call in POST handler.
+   - But `spawn_background_job()` in stories/01-agent.md background_task.py interface shows `async def spawn_background_job(agent_run_id: str, query: str, run_store: "RunStore") -> None: pass` (placeholder, no-op).
+   - **This violates Story 1 definition:** Story 1 must spawn the task; Story 2 implements orchestration logic. Current breakdown defers the **entire spawn call** to Story 2 by leaving spawn_background_job() empty, but spawn itself must happen in Story 1 to satisfy "launch background job asynchronously" in AC-1.
 
-8. **Stack/language vs. repo context:** Repo context specifies Python, FastAPI. All specs and stories use Python-native patterns (Pydantic, asyncio, FastAPI StreamingResponse, uuid.uuid4()). No TypeScript, JavaScript, or other language artifacts. **PASS on stack alignment.**
+8. **Test coverage for Story 1 Tests 6 not verifiable in Story 1 alone:**
+   - Test 6: "Rejection does not call `process_question`" — requires mock/spy on `process_question`.
+   - But `process_question` is in `agent/src/agent/orchestrator.py` (per change_requests.md preserved modules).
+   - Story 1 does not import or call `process_question` in its handler; spawn_background_job() is a no-op placeholder.
+   - **This test cannot fail in Story 1** because rejection path calls `run_store.mark_failed()`, not `spawn_background_job()`. The test is artifactually passing due to incomplete implementation.
 
-9. **AC wording consistency:** 
-   - Ticket lists 6 ACs with specific **Given/When/Then** phrasing.
-   - requirements.md reproduces same phrasing for all 6 ACs.
-   - Breakdown maps ACs to stories without inventing new ACs.
-   - Stories 01-agent, 02-agent, 03-agent reproduce their assigned ACs verbatim.
-   - Specs 1, 2, 3 do not restate ACs as new ones; they document schema and algorithms supporting them.
-   **PASS on AC consistency.**
+9. **Missing merged_plan.md:**
+   - Ticket specifies "check…merged_plan.md when present."
+   - No merged_plan.md file provided in context.
+   - Cannot verify story execution order gaps or merged story consolidation logic.
+   - **Cannot fully verify breakdown story dependencies and sequencing without this file.**
 
-10. **Verification/test count between breakdown and story Tests sections:**
-    - Breakdown Story 1: 8 tests specified in Verification Approach table.
-    - stories/01-agent.md Tests section: 8 tests listed (Test 1–8).
-    - Breakdown Story 2: 15 tests specified.
-    - stories/02-agent.md Tests section: 15 tests listed (Test 1–15).
-    - Breakdown Story 3: 9 tests specified.
-    - stories/03-agent.md Tests section: 9 tests listed (Test 1–9).
-    **PASS on test count alignment across breakdown and stories.**
+10. **Specs file for PER-43, PER-44, PER-45 missing schema lock on request/response models:**
+    - specs/PER-43.md, specs/PER-44.md, specs/PER-45.md all define Pydantic models.
+    - But no specs/PER-43.md file present in the file list (only specs/1.md, specs/2.md, specs/3.md).
+    - Inconsistency: `proposed_tickets.md` maps `01-agent` → `PER-43`, etc., but specs directory has numeric files, not ticket-id files.
+    - **File path inconsistency:** Specs should be named `specs/PER-43.md`, `specs/PER-44.md`, `specs/PER-45.md` per ADLC pattern, or numeric files should map to ticket IDs in a manifest. Current state mixes both conventions.
 
-11. **Schema on data/API tickets:** Tickets are behavioral (non-blocking POST, SSE stream, backward compat), not data/schema-focused. However, all schemas are documented:
-    - Request/response models in specs/1.md (Pydantic).
-    - Event data models in specs/2.md.
-    - No new data structures; all defined in Pydantic or inline as dicts.
-    **PASS on schema documentation.**
-
-**Result: PASS — All consistency rules satisfied. AC count, test count, file paths, stack, HLD outcomes, and AC wording align across ticket, requirements, proposed_tickets, HLD, breakdown, specs, and stories. No specs/ files missing for child tickets. No contradictions with change_requests.md (not present). No merged_plan.md order gaps (not applicable).**
+11. **AC-2 detailed verification incomplete:**
+    - AC-2 requires: "GET /agent/runs/{agent_run_id}/events sends `failed` with that reason and does not send `completed`."
+    - stories/02-agent.md Test 11 verifies this (invalid query → failed, no completed).
+    - But stories/01-agent.md does not verify that the `failed` event is actually enqueued and retrievable via SSE in Story 1 tests.
+    - Test 8 in stories/01-agent.md is titled "agent_run_id consistent in SSE stream" but SSE is Story 2 scope—**Test 8 should not exist in Story 1 tests; it belongs in Story 2 verification.**

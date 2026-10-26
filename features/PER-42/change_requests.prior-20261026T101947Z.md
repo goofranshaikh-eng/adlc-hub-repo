@@ -1,0 +1,1 @@
+Use the existing PER-20 layout. Routes go in agent/main.py. Keep agent/orchestrator.py, agent/health.py, and agent/mcp_client.py. Do not add agent/src/agent/routes.py or agent/src/routes/agent.py. Use that one path in the specs, breakdown, and stories.

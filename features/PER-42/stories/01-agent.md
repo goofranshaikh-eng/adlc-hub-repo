@@ -1,6 +1,8 @@
 ```markdown
-# Story 01-agent: Accept FastAPI query without blocking; return agent_run_id immediately
+# Story LLD: 01-agent — Accept FastAPI query without blocking; return agent_run_id immediately
 
+**Ticket ID:** PER-43  
+**Story ID:** 01-agent  
 **Repository:** `agent`  
 **Acceptance Criteria:** AC-1, AC-2  
 **Story Type:** Backend Feature  
@@ -35,9 +37,7 @@ agent/
 │   ├── agent/
 │   │   ├── __init__.py
 │   │   ├── models.py
-│   │   ├── run_store.py
-│   │   ├── orchestrator.py
-│   │   └── routes.py
+│   │   └── run_store.py
 │   └── main.py
 └── tests/
     └── test_agent_query_accept.py
@@ -47,10 +47,8 @@ agent/
 
 1. **`agent/src/agent/models.py`** — Pydantic models for request/response validation.
 2. **`agent/src/agent/run_store.py`** — In-memory run registry; manages `agent_run_id` and event queues.
-3. **`agent/src/agent/orchestrator.py`** — Background task spawn logic; interface to `process_question`.
-4. **`agent/src/agent/routes.py`** — FastAPI route handler for `POST /agent/query`.
-5. **`agent/src/main.py`** — Application startup; register routes and run store.
-6. **`agent/tests/test_agent_query_accept.py`** — Unit tests for AC-1 and AC-2.
+3. **`agent/src/main.py`** — Application startup; POST /agent/query route handler and run store initialization. Custom exception handler to convert HTTP 422 validation errors to HTTP 200 rejected responses.
+4. **`agent/tests/test_agent_query_accept.py`** — Unit tests for AC-1 and AC-2.
 
 ### Modified Files
 
@@ -97,6 +95,8 @@ class AgentQueryRejected(BaseModel):
 from dataclasses import dataclass
 from typing import Optional
 from asyncio import Queue
+import uuid
+import time
 
 @dataclass
 class Run:
@@ -114,43 +114,112 @@ class Run:
 class RunStore:
     """In-memory registry of active runs."""
     
-    async def create(query: str) -> Run:
-        """Generate unique agent_run_id, create Run, enqueue in_progress event, return Run."""
-        # Returns: Run object with id, events queue pre-populated with in_progress
+    def __init__(self):
+        self._runs: dict[str, Run] = {}
     
-    async def get(run_id: str) -> Optional[Run]:
+    async def create(self, query: str) -> Run:
+        """Generate unique agent_run_id, create Run, enqueue in_progress event, return Run.
+        
+        Returns: Run object with id, events queue pre-populated with in_progress event.
+        The in_progress event is enqueued synchronously before this method returns.
+        """
+        run_id = uuid.uuid4().hex
+        now = time.time()
+        
+        run = Run(
+            id=run_id,
+            query=query,
+            created_at=now,
+            status="pending",
+            events=Queue(),
+            in_progress_sent_at=now
+        )
+        
+        self._runs[run_id] = run
+        
+        # Enqueue in_progress event immediately
+        await run.events.put({
+            "event": "in_progress",
+            "data": {"run_id": run_id}
+        })
+        
+        return run
+    
+    async def get(self, run_id: str) -> Optional[Run]:
         """Retrieve Run by agent_run_id; return None if not found or expired."""
+        return self._runs.get(run_id)
     
-    async def enqueue_event(run_id: str, event_type: str, data: dict) -> None:
-        """Append event to run's queue for SSE delivery."""
+    async def enqueue_event(self, run_id: str, event_type: str, data: dict) -> None:
+        """Append event to run's queue for SSE delivery.
+        
+        Args:
+            run_id: agent_run_id
+            event_type: "in_progress", "completed", or "failed"
+            data: JSON-serializable dict with run_id and result/error
+        """
+        run = self._runs.get(run_id)
+        if run:
+            await run.events.put({"event": event_type, "data": data})
     
-    async def mark_failed(run_id: str, reason: str) -> None:
-        """Mark rejected run as failed; enqueue failed event."""
+    async def mark_failed(self, run_id: str, reason: str) -> None:
+        """Mark rejected run as failed; enqueue failed event.
+        
+        Called during AC-2 rejection path (invalid input) to enqueue the failed event.
+        The in_progress event was already enqueued by create().
+        Both events are now queued in run.events for SSE delivery.
+        """
+        run = self._runs.get(run_id)
+        if run:
+            run.status = "failed"
+            await run.events.put({
+                "event": "failed",
+                "data": {"run_id": run_id, "error": reason}
+            })
     
-    async def cleanup_expired(ttl_seconds: int = 3600) -> None:
-        """Delete runs older than ttl_seconds (cron task, deferred to Story 2)."""
+    async def cleanup_expired(self, ttl_seconds: int = 3600) -> None:
+        """Delete runs older than ttl_seconds (deferred to Story 2).
+        
+        Implementation provided in Story 2. Placeholder in Story 1.
+        """
+        pass
 ```
 
-### Orchestrator Interface (`agent/src/agent/orchestrator.py`)
+### Route Handler (`agent/src/main.py` — POST /agent/query endpoint)
 
 ```python
-async def spawn_background_job(agent_run_id: str, query: str) -> None:
-    """Spawn background task for this run without waiting for it to complete.
-    
-    Calls the PER-20 process_question(query) in background.
-    Enqueues result events to run_store.
-    """
-```
-
-### Route Handler (`agent/src/agent/routes.py`)
-
-```python
-from fastapi import APIRouter, HTTPException
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 from agent.models import AgentQueryRequest, AgentQueryAccepted, AgentQueryRejected
+from agent.run_store import RunStore
+import asyncio
 
-router = APIRouter(prefix="/agent", tags=["agent"])
+app = FastAPI()
 
-@router.post("/query", response_model=AgentQueryAccepted | AgentQueryRejected)
+# Global singleton run store
+run_store = RunStore()
+
+# Custom exception handler: convert HTTP 422 (Pydantic validation error) to HTTP 200 rejected response
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc):
+    """Convert Pydantic validation errors to HTTP 200 rejected response.
+    
+    FastAPI will raise RequestValidationError (HTTP 422) when query field is missing
+    or is not a string. This handler intercepts it and returns HTTP 200 with
+    rejected status, matching AC-1 and AC-2 contract.
+    """
+    run = await run_store.create("")
+    await run_store.mark_failed(run.id, "invalid query")
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": "rejected",
+            "agent_run_id": run.id,
+            "reason": "invalid query"
+        }
+    )
+
+@app.post("/agent/query", response_model=AgentQueryAccepted | AgentQueryRejected)
 async def post_agent_query(req: AgentQueryRequest) -> AgentQueryAccepted | AgentQueryRejected:
     """
     Accept a user query immediately and return agent_run_id.
@@ -158,66 +227,135 @@ async def post_agent_query(req: AgentQueryRequest) -> AgentQueryAccepted | Agent
     - AC-1: Return HTTP 200 immediately without waiting for process_question.
     - AC-2: Reject if query is missing or empty/whitespace-only; do not spawn background job.
     """
+    query = req.query.strip()
+    
+    if not query:
+        # Rejection path (AC-2): empty or whitespace-only query
+        run = await run_store.create("")
+        await run_store.mark_failed(run.id, "invalid query")
+        return AgentQueryRejected(
+            status="rejected",
+            agent_run_id=run.id,
+            reason="invalid query"
+        )
+    
+    # Acceptance path (AC-1)
+    run = await run_store.create(query)
+    # Spawn background job asynchronously without awaiting (returns immediately)
+    asyncio.create_task(run_background_job(run.id, query, run_store))
+    return AgentQueryAccepted(status="ok", agent_run_id=run.id)
+
+async def run_background_job(agent_run_id: str, query: str, run_store: RunStore) -> None:
+    """Placeholder for background job orchestration.
+    
+    This function is spawned via asyncio.create_task() and does not block the POST handler.
+    
+    Full implementation (event enqueue and orchestrator call) is provided in Story 2.
+    Story 1: this function is spawned but does not execute any work.
+    
+    Args:
+        agent_run_id: unique run identifier
+        query: user query string (already validated and stripped)
+        run_store: RunStore singleton for event enqueue
+    
+    Note: Story 2 (02-agent) implements the actual orchestration:
+      - Call process_question(query) from PER-20
+      - Apply 5-second hold for completed events only
+      - Enqueue result (completed or failed) to run_store
+      - Handle exceptions and emit failed events
+    """
+    pass
+
+# Existing endpoints (unchanged)
+@app.post("/query")
+async def post_query(question: str) -> dict:
+    """Existing blocking query endpoint (PER-20)."""
+    # Implementation from PER-20; no changes
+    pass
+
+@app.get("/health")
+async def get_health() -> dict:
+    """Existing health check endpoint (unchanged)."""
+    return {"status": "ok"}
 ```
 
 ---
 
 ## Algorithm Notes
 
-### Input Validation
+### Input Validation & Error Handling
 
-1. Receive `AgentQueryRequest` with `query` field.
-2. FastAPI automatic validation (Pydantic):
-   - Reject if `query` field is missing → 422 Unprocessable Entity (not our 200 response).
-   - Reject if `query` is empty string (`""`).
-   - Reject if `query` is `None`.
-3. **Custom validation:** Strip whitespace; if result is empty, treat as invalid.
-4. **Decision:** HTTP 200 for both acceptance and rejection (per AC-1, AC-2 contract); never 422.
+1. **Pydantic validation (automatic):**
+   - FastAPI receives request body and validates against `AgentQueryRequest` schema.
+   - If `query` field is missing: FastAPI raises `RequestValidationError` → HTTP 422.
+   - If `query` is not a string: FastAPI raises `RequestValidationError` → HTTP 422.
+   - Custom exception handler (registered at app startup) catches `RequestValidationError` and converts to HTTP 200 rejected response before POST handler body executes.
+
+2. **Custom validation in handler:**
+   - Strip whitespace from `query`.
+   - If result is empty string, treat as invalid (rejection path).
+
+3. **Response contract:** HTTP 200 for both acceptance and rejection (per AC-1, AC-2); never 422 from this endpoint.
 
 ### Acceptance Path (AC-1)
 
-1. Input passes validation.
+1. Input passes validation (non-empty after strip).
 2. Call `run_store.create(query.strip())`:
-   - Generate `agent_run_id` as UUID v4 hex string.
+   - Generate `agent_run_id` as UUID v4 hex string (32 chars, globally unique).
    - Create `Run` object with status `"pending"`.
    - Create `asyncio.Queue` for events.
    - Record `in_progress_sent_at = time.time()`.
-   - Enqueue `in_progress` event with data `{"run_id": agent_run_id}`.
+   - Enqueue `in_progress` event with data `{"run_id": agent_run_id}` (synchronous).
+   - Store `Run` in `_runs` dict keyed by `agent_run_id`.
    - Return `Run` object.
-3. Spawn background job: `asyncio.create_task(spawn_background_job(agent_run_id, query.strip()))`.
+3. Spawn background job: `asyncio.create_task(run_background_job(run.id, query.strip(), run_store))`.
    - **Critical:** Do not `await` this call; return immediately.
+   - Background task will call `process_question` asynchronously (implementation deferred to Story 2).
 4. Return HTTP 200 `AgentQueryAccepted(status="ok", agent_run_id=run.id)`.
 
 ### Rejection Path (AC-2)
 
-1. Input fails validation (empty or whitespace-only `query`).
-2. Call `run_store.create("")`:
-   - Generate `agent_run_id` as UUID v4 hex string.
-   - Create `Run` object with status `"pending"`.
-   - Record `in_progress_sent_at = time.time()`.
-   - Enqueue `in_progress` event with data `{"run_id": agent_run_id}`.
-   - Return `Run` object.
-3. Call `run_store.mark_failed(agent_run_id, "invalid query")`:
-   - Update status to `"failed"`.
-   - Enqueue `failed` event with data `{"run_id": agent_run_id, "error": "invalid query"}`.
-   - This event is queued in `run.events` before POST returns; SSE stream (Story 2) reads and delivers it.
-4. **Do NOT spawn background job.**
-5. Return HTTP 200 `AgentQueryRejected(status="rejected", agent_run_id=run.id, reason="invalid query")`.
+**Path A: Pydantic validation error (HTTP 422 → 200 via custom handler)**
+
+1. Request body missing `query` field or `query` is not a string.
+2. FastAPI raises `RequestValidationError`.
+3. Custom exception handler intercepts:
+   - Calls `run_store.create("")`.
+   - Calls `run_store.mark_failed(run.id, "invalid query")`.
+   - Returns HTTP 200 `{"status": "rejected", "agent_run_id": run.id, "reason": "invalid query"}`.
+4. **Do NOT execute POST handler body; do NOT spawn background job.**
+
+**Path B: Handler-level validation (empty or whitespace-only query)**
+
+1. `AgentQueryRequest` validation passes (query is non-empty string).
+2. POST handler body executes.
+3. Handler strips whitespace; if result is empty, rejection path:
+   - Call `run_store.create("")`.
+   - Call `run_store.mark_failed(run.id, "invalid query")`.
+   - Return HTTP 200 `AgentQueryRejected(status="rejected", agent_run_id=run.id, reason="invalid query")`.
+4. **Do NOT spawn background job; do not call `process_question`.**
+
+**Both rejection paths result in:**
+- Both `in_progress` and `failed` events queued in `run.events`.
+- No background job spawned.
+- HTTP 200 response returned immediately.
+- When SSE stream opens later (Story 2), subscriber reads both events and closes stream.
 
 ### ID Generation
 
-- Use `uuid.uuid4().hex` → 32-character lowercase hex string (e.g., `"a1b2c3d4e5f6..."`).
+- Use `uuid.uuid4().hex` → 32-character lowercase hex string (e.g., `"a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"`).
 - Collision probability: negligible (< 2^-120 for < 1 billion IDs).
-- No locking required; UUIDs are globally unique.
+- No locking required; UUID v4 generation is thread-safe.
 
-### Error Handling
+### Error Handling in Story 1
 
-- **Validation error (AC-2):** Caught before background job spawn; `mark_failed()` enqueues `failed` event synchronously.
-- **Unhandled exception in POST handler:** Return HTTP 500 (FastAPI default). Story 2 will wrap background job in try/except.
+- **Pydantic validation error:** Caught by custom exception handler before POST handler body executes.
+- **Handler-level validation error:** Caught by post_agent_query; calls `mark_failed()` to enqueue `failed` event before returning.
+- **Unhandled exception in POST handler:** Bubbles up to FastAPI; returns HTTP 500 by default. Story 2 wraps background job in try/except to emit `failed` events on exceptions.
 
 ---
 
-## Verify
+## Tests
 
 ### Unit Test File: `agent/tests/test_agent_query_accept.py`
 
@@ -226,32 +364,31 @@ async def post_agent_query(req: AgentQueryRequest) -> AgentQueryAccepted | Agent
 ```python
 async def test_post_agent_query_valid_returns_ok():
     """Given valid query, POST /agent/query returns ok and agent_run_id immediately."""
-    # Setup: create test client, clear run store
+    # Setup: create test client, initialize run store
     # When: POST /agent/query with {"query": "What is …?"}
     # Then: response status 200, body {"status": "ok", "agent_run_id": "<32-char uuid hex>"}
+    # Verify: response status is 200, contains status: "ok", contains non-empty agent_run_id
 ```
 
 **Verification:**
-- Response status is 200.
-- Response body contains `status: "ok"`.
-- Response body contains `agent_run_id` as non-empty string.
-- Response is returned without waiting for `process_question` (time < 100ms).
+- Response HTTP status is 200.
+- Response body contains `"status": "ok"`.
+- Response body contains `"agent_run_id"` as non-empty string.
 
 #### Test 2: AC-1 — Immediate return; does not wait for background job
 
 ```python
 async def test_post_agent_query_returns_immediately():
-    """Given valid query, POST returns before process_question completes."""
-    # Setup: mock process_question to sleep 5s
+    """Given valid query, POST returns before process_question completes (no blocking)."""
+    # Setup: mock process_question to sleep 5s (if implemented in Story 2)
     # When: POST /agent/query with {"query": "…"}
-    # Then: response returned in < 100ms (before sleep ends)
-    # And: background job continues in background (verify via run_store state)
+    # Then: response returned in < 100ms
+    # Verify: request elapsed time < 100ms (background task spawned but not awaited)
 ```
 
 **Verification:**
-- Request time to response < 100ms.
-- Background task state is `"pending"` immediately after return.
-- Background task eventually completes (async verification).
+- Request elapsed time from POST to response < 100ms (no waiting for LLM/MCP).
+- Background task is spawned asynchronously (state "pending" immediately after POST returns).
 
 #### Test 3: AC-2 — Empty query returns rejected with reason
 
@@ -259,28 +396,29 @@ async def test_post_agent_query_returns_immediately():
 async def test_post_agent_query_empty_returns_rejected():
     """Given empty query, POST returns rejected with reason."""
     # When: POST /agent/query with {"query": ""}
-    # Then: response status 200, body {"status": "rejected", "agent_run_id": "…", "reason": "invalid query"}
+    # Then: response status 200, body contains status: "rejected", reason: "invalid query", agent_run_id
 ```
 
 **Verification:**
-- Response status is 200.
-- Response body contains `status: "rejected"`.
-- Response body contains `reason: "invalid query"`.
-- Response body contains `agent_run_id`.
+- Response HTTP status is 200 (not 422).
+- Response body contains `"status": "rejected"`.
+- Response body contains `"reason": "invalid query"`.
+- Response body contains `"agent_run_id"` as non-empty string.
 
-#### Test 4: AC-2 — Missing query field returns rejected
+#### Test 4: AC-2 — Missing query field returns rejected (HTTP 422 → 200)
 
 ```python
 async def test_post_agent_query_missing_field_returns_rejected():
-    """Given missing query field, POST returns rejected."""
-    # When: POST /agent/query with {} (empty body)
-    # Then: response status 200, body {"status": "rejected", "agent_run_id": "…", "reason": "invalid query"}
+    """Given missing query field, POST returns rejected (Pydantic 422 converted to 200)."""
+    # When: POST /agent/query with {} (empty body, missing query field)
+    # Then: response status 200 (not 422), body contains status: "rejected", reason: "invalid query"
 ```
 
 **Verification:**
-- Response status is 200.
-- Response body contains `status: "rejected"`.
-- Response body contains `reason: "invalid query"`.
+- Response HTTP status is 200 (not 422; custom exception handler converts validation error).
+- Response body contains `"status": "rejected"`.
+- Response body contains `"reason": "invalid query"`.
+- Response body contains `"agent_run_id"`.
 
 #### Test 5: AC-2 — Whitespace-only query returns rejected
 
@@ -288,67 +426,60 @@ async def test_post_agent_query_missing_field_returns_rejected():
 async def test_post_agent_query_whitespace_returns_rejected():
     """Given whitespace-only query, POST returns rejected."""
     # When: POST /agent/query with {"query": "   \t\n  "}
-    # Then: response status 200, body {"status": "rejected", …}
+    # Then: response status 200, body contains status: "rejected"
 ```
 
 **Verification:**
-- Response status is 200.
-- Response body contains `status: "rejected"`.
+- Response HTTP status is 200.
+- Response body contains `"status": "rejected"`.
+- Response body contains `"reason": "invalid query"`.
 
-#### Test 6: AC-2 — Rejection does not call LLM or MCP
+#### Test 6: AC-2 — Rejection does not spawn background job
 
 ```python
-async def test_post_agent_query_rejection_no_lm_call():
-    """Given rejected query, LLM and MCP are not called."""
-    # Setup: mock process_question with spy
+async def test_post_agent_query_rejection_no_background_job():
+    """Given rejected query, background job is not spawned."""
+    # Setup: spy on asyncio.create_task() or check run_background_job call count
     # When: POST /agent/query with {"query": ""}
-    # Then: process_question is never called
+    # Then: asyncio.create_task() is not called, background job spawn count = 0
 ```
 
 **Verification:**
-- `process_question` mock call count is 0.
-- Background job is not spawned.
+- `asyncio.create_task()` is not called on rejection path.
+- `run_background_job()` function is never invoked.
 
-#### Test 7: AC-1, AC-2 — Both paths return non-empty agent_run_id
+#### Test 7: AC-1, AC-2 — Both paths return non-empty, unique agent_run_id
 
 ```python
-async def test_post_agent_query_both_paths_return_run_id():
-    """Given any query (valid or invalid), agent_run_id is returned."""
-    # When: POST with valid query
-    # Then: agent_run_id is non-empty string
-    # When: POST with empty query
-    # Then: agent_run_id is non-empty string (different from first)
+async def test_post_agent_query_both_paths_return_unique_run_id():
+    """Given any query (valid or invalid), agent_run_id is returned and unique."""
+    # When: POST with valid query, then POST with empty query
+    # Then: both responses have non-empty agent_run_id, values are different
 ```
 
 **Verification:**
-- Acceptance response has `agent_run_id` with length > 0.
-- Rejection response has `agent_run_id` with length > 0.
-- Two different calls return different `agent_run_id` values.
+- Acceptance response has non-empty `agent_run_id`.
+- Rejection response has non-empty `agent_run_id`.
+- Two separate calls return different `agent_run_id` values (UUID v4 uniqueness).
 
-#### Test 8: AC-1, AC-2 — agent_run_id is consistent across request and SSE stream
+#### Test 8: AC-2 — Rejection path enqueues failed event synchronously
 
 ```python
-async def test_post_agent_query_run_id_consistent():
-    """Given POST response with agent_run_id, SSE stream uses same id."""
-    # When: POST /agent/query returns {"agent_run_id": "abc123…"}
-    # And: GET /agent/runs/{abc123…}/events is called
-    # Then: SSE in_progress event contains {"run_id": "abc123…"} (same id)
+async def test_post_agent_query_rejection_enqueues_events():
+    """Given rejected query, in_progress and failed events are enqueued synchronously."""
+    # Setup: POST /agent/query with {"query": ""}; capture agent_run_id
+    # When: POST returns
+    # Then: run_store contains run with id matching response agent_run_id
+    # And: run.events queue contains exactly 2 events: in_progress, then failed
 ```
 
 **Verification:**
-- POST response `agent_run_id` matches SSE event `run_id` (delivered by Story 2 SSE handler reading event queue).
-
----
-
-## Notes
-
-- **No auth required.** Out of scope per AC-6 and requirements.
-- **No rate limiting.** Assume upstream FastAPI middleware.
-- **UUID v4 collision safety:** Safe for up to billions of runs.
-- **Synchronous validation:** O(1) string check; no async overhead; validation happens before task spawn.
-- **Background job spawn:** Via `asyncio.create_task()`; does not block request handler.
-- **Event enqueue:** Rejection path enqueues `in_progress` and `failed` events to `run.events` (an `asyncio.Queue`) synchronously before POST returns. Story 2 SSE stream handler reads these queued events when `GET /agent/runs/{agent_run_id}/events` is called (see Story 2 for event delivery).
-- **PER-20 dependency:** `process_question(query: str) → dict` signature is fixed (AC-6). Any future change must preserve return type.
+- POST response status is 200.
+- Run store contains run with `id` matching response `agent_run_id`.
+- `run.events` queue contains exactly 2 events in order:
+  1. Event type `"in_progress"`, data `{"run_id": agent_run_id}`.
+  2. Event type `"failed"`, data `{"run_id": agent_run_id, "error": "invalid query"}`.
+- Both events are queued synchronously before POST returns (available for SSE delivery in Story 2).
 
 ---
 
@@ -356,8 +487,25 @@ async def test_post_agent_query_run_id_consistent():
 
 | AC | Test # | Condition | Pass Criteria |
 |----|----|-----------|---------------|
-| AC-1 | 1, 2, 7 | Valid query → immediate ok response | Response contains `status: "ok"`, `agent_run_id`, returned in < 100ms |
-| AC-2 | 3, 4, 5, 6, 7 | Empty/missing/whitespace query → immediate rejected response, no LLM/MCP call | Response contains `status: "rejected"`, `reason: "invalid query"`, `agent_run_id`; `process_question` never called; `failed` event enqueued |
+| AC-1 | 1, 2, 7 | Valid query → immediate ok response | Response contains `status: "ok"`, `agent_run_id`, returned in < 100ms; no wait for `process_question` |
+| AC-2 | 3, 4, 5, 6, 8 | Empty/missing/whitespace query → immediate rejected response, no background job spawn | Response contains `status: "rejected"`, `reason: "invalid query"`, `agent_run_id`; background job not spawned; in_progress and failed events enqueued synchronously before POST returns |
+| AC-2 | 4 | Pydantic validation error (HTTP 422) converted to HTTP 200 | Custom exception handler converts missing/non-string query to HTTP 200 rejected response |
+| AC-1, AC-2 | 7 | agent_run_id uniqueness and return | Both acceptance and rejection paths return non-empty, unique agent_run_id on separate calls |
 
-**Total Test Count: 8** (matching breakdown and ticket AC count)
+**Total Test Count: 8**
+
+---
+
+## Notes
+
+- **No auth required.** Out of scope per AC-6 and requirements.
+- **No rate limiting.** Assume upstream FastAPI middleware.
+- **UUID v4 collision safety:** Safe for up to billions of runs; no ID reuse or collision risk.
+- **Synchronous validation:** O(1) string check (strip and empty test); no async overhead; validation happens before task spawn.
+- **Background job spawn:** Via `asyncio.create_task()`; does not block request handler or await completion. Returns immediately to caller.
+- **Event enqueue on rejection:** `in_progress` and `failed` events enqueued to `run.events` (an `asyncio.Queue`) synchronously before POST returns. Story 2 SSE stream handler reads and delivers these queued events when `GET /agent/runs/{agent_run_id}/events` is called.
+- **Pydantic validation handling:** Custom exception handler catches HTTP 422 from Pydantic validation (missing or non-string `query`) and converts to HTTP 200 rejected response before handler body executes. This ensures AC-1 and AC-2 contract for HTTP 200 responses is honored.
+- **PER-20 dependency:** `process_question(query: str) → dict` signature is fixed (AC-6). Any future change must preserve return type: `{"answer": "<text>"}` or `{"error": "<message>"}`.
+- **Run store lifecycle:** Runs are created and stored in memory. Cleanup (TTL-based expiration) deferred to Story 2. No persistence layer; in-memory queue is sufficient for PoC.
+- **Routes location:** Per `change_requests.md`, all routes (POST /agent/query, GET /agent/runs/{id}/events, existing POST /query and GET /health) are registered in `agent/src/main.py`. No separate routes module or file.
 ```
