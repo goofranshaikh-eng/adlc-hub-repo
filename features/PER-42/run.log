@@ -1,12 +1,12 @@
-2026-10-26T09:16:19.556930+00:00 heartbeat triage
-2026-10-26T09:16:19.559499+00:00 heartbeat triage
-2026-10-26T09:16:19.565610+00:00 heartbeat analyst
-2026-10-26T09:16:19.565805+00:00 node start analyst
-2026-10-26T09:16:19.570723+00:00 heartbeat analyst
-2026-10-26T09:16:28.399912+00:00 analyst llm model=claude-haiku-4-5-20251001 in=9474 out=671 usd=0.012829
-2026-10-26T09:16:28.404157+00:00 heartbeat analyst
-2026-10-26T09:16:30.802195+00:00 analyst llm model=claude-haiku-4-5-20251001 in=10167 out=130 usd=0.010817
-2026-10-26T09:16:30.802946+00:00 node end analyst waiting=None
-2026-10-26T09:16:30.807169+00:00 heartbeat tpm_gate
-2026-10-26T09:16:30.807422+00:00 node start tpm_gate
-2026-10-26T09:16:38.555834+00:00 node end tpm_gate waiting=tpm_review
+2026-10-26T09:18:25.917881+00:00 heartbeat triage
+2026-10-26T09:18:25.920454+00:00 heartbeat triage
+2026-10-26T09:18:25.926070+00:00 heartbeat analyst
+2026-10-26T09:18:25.926277+00:00 node start analyst
+2026-10-26T09:18:25.929154+00:00 heartbeat analyst
+2026-10-26T09:18:37.545990+00:00 analyst llm model=claude-haiku-4-5-20251001 in=9378 out=992 usd=0.014338
+2026-10-26T09:18:37.548719+00:00 heartbeat analyst
+2026-10-26T09:18:40.338538+00:00 analyst llm model=claude-haiku-4-5-20251001 in=10392 out=149 usd=0.011137
+2026-10-26T09:18:40.339201+00:00 node end analyst waiting=None
+2026-10-26T09:18:40.341495+00:00 heartbeat tpm_gate
+2026-10-26T09:18:40.341614+00:00 node start tpm_gate
+2026-10-26T09:18:44.856113+00:00 node end tpm_gate waiting=tpm_review

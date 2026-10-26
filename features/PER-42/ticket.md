@@ -4,8 +4,10 @@ type: story
 status: todo
 blocks: []
 blocked_by: []
-labels: []
-repos: []
+labels:
+- repo:agent
+repos:
+- agent
 summary: Accept a FastAPI query immediately and publish the PER-20 answer on SSE
 ---
 
