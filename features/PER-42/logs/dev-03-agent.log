@@ -1,0 +1,9 @@
+Story 03-agent is in place. `POST /query` again blocks on `process_question`, and the nine AC-6 regression tests pass.
+
+The Story 1 handler returned without calling `process_question`, so it could not return `{"answer": "..."}` or `{"error": "..."}`. `post_query` now reads `{"question": "..."}`, awaits `process_question` in this process, and returns that dict with HTTP 200. `GET /health` is still exactly `{"status": "ok"}`.
+
+**Files changed**
+- `agent/main.py` — restored the blocking `POST /query` handler
+- `agent/tests/test_backward_compat.py` — nine AC-6 tests (blocking answer and error, latency versus a 100 ms baseline, health with no run-store changes, coexistence with `POST /agent/query`, main-process-only MCP, tool names, id normalization, `MCP_URL`)
+
+**Tests:** `python -m pytest agent/tests -q` — 17 passed.
