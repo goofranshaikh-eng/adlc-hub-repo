@@ -1,0 +1,17 @@
+`POST /agent/query` now accepts a query and returns an `agent_run_id` before any LLM or MCP work runs.
+
+- A non-empty query returns HTTP 200 `{"status": "ok", "agent_run_id": "<uuid v4 hex>"}`. The run stays `pending`, and `run_background_job` is scheduled with `asyncio.create_task` and not awaited. That function is a no-op until Story 2.
+- A missing, non-string, empty, or whitespace-only `query` returns HTTP 200 `{"status": "rejected", "agent_run_id": "...", "reason": "invalid query"}`. The run is marked failed with `in_progress` then `failed` already queued, and no background job is started.
+- `GET /health` still returns `{"status": "ok"}`. `POST /query` is registered and left as the existing placeholder.
+
+`python -m pytest agent/tests -q` — 8 passed.
+
+Files changed:
+
+- `agent/__init__.py`
+- `agent/models.py`
+- `agent/run_store.py`
+- `agent/main.py`
+- `agent/tests/test_agent_query_accept.py`
+- `requirements.txt`
+- `README.md`
