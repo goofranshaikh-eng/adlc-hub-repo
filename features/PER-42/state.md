@@ -1,15 +1,15 @@
 ---
 schema_version: 1
 key: PER-42
-status: escalated
-current_node: critic
+status: waiting_architect_review
+current_node: architect_gate
 track: standard
 involved_repos:
 - agent
 depends_on: []
 owner: goos
 lease_until: '2026-10-28T09:25:21.290994+00:00'
-revision: 30
+revision: 47
 hub_sha: null
 ticket_hash: b484f286ecf83bff
 jira_hash: b484f286ecf83bff
@@ -25,15 +25,17 @@ child_ticket_keys:
 - PER-43
 - PER-44
 - PER-45
-critic_iterations: 2
+critic_iterations: 0
 dev_retries: 0
 pr_revision_rounds: 0
 pr_ids:
   hub_tpm: '11'
-waiting_for: human_critic
-tokens_in: 3912630
-tokens_out: 282917
-cost_anthropic_usd: 5.327215
+  hub_arch: '12'
+  hub: '12'
+waiting_for: architect_review
+tokens_in: 4365624
+tokens_out: 323854
+cost_anthropic_usd: 5.984894
 history:
 - node: intake
   note: snapshot written
@@ -129,6 +131,40 @@ history:
 - node: critic
   note: exhausted; wrote change_requests.md
   at: '2026-10-26T10:19:47.524578+00:00'
+- node: critic
+  note: changes requested
+  at: '2026-10-26T10:57:18.365596+00:00'
+- node: critic
+  note: "course correction \u2192 architect"
+  at: '2026-10-26T10:57:21.973800+00:00'
+- node: architect
+  note: wrote hld.md
+  at: '2026-10-26T10:58:27.814504+00:00'
+- node: architect
+  note: specs=['PER-43', 'PER-44', 'PER-45']
+  at: '2026-10-26T10:58:27.816776+00:00'
+- node: scrum_master
+  note: stories=['01-agent', '02-agent', '03-agent']; linear=['PER-43', 'PER-44',
+    'PER-45']
+  at: '2026-10-26T10:59:21.564822+00:00'
+- node: designer
+  note: lld updated
+  at: '2026-10-26T11:01:55.881546+00:00'
+- node: test_architect
+  note: tests appended
+  at: '2026-10-26T11:04:33.666568+00:00'
+- node: critic
+  note: passed manually; skip repair
+  at: '2026-10-26T11:28:17.490533+00:00'
+- node: merge_pack
+  note: continue to architect review
+  at: '2026-10-26T11:28:44.211386+00:00'
+- node: merge_pack
+  note: merged 3 ticket(s)
+  at: '2026-10-26T11:28:52.327057+00:00'
+- node: architect_gate
+  note: awaiting human hub PR approval
+  at: '2026-10-26T11:28:58.533899+00:00'
 ---
 
 # Feature state

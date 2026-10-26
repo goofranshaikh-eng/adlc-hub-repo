@@ -1,3 +1,4 @@
+```markdown
 # Story LLD: 03-agent — Preserve existing POST /query and GET /health endpoints
 
 **Ticket ID:** PER-45  
@@ -34,7 +35,7 @@ agent/
 
 ```
 agent/
-└── src/main.py                         (audit existing POST /query and GET /health; no code changes)
+└── main.py                         (audit existing POST /query and GET /health; no code changes)
 ```
 
 ### Configuration Files (Audit Only)
@@ -120,12 +121,12 @@ This story performs an **audit** of existing endpoints and **regression testing*
 #### Audit Checklist
 
 1. **POST /query handler location:**
-   - Located in `src/main.py` (per change_requests.md).
+   - Located in `main.py` (per `change_requests.md`).
    - Verify handler calls `process_question(question)` directly (blocking).
    - Confirm no async/await wrapper that alters behavior from pre-Story-1 state.
 
 2. **GET /health handler location:**
-   - Located in `src/main.py` (per change_requests.md).
+   - Located in `main.py` (per `change_requests.md`).
    - Verify handler returns `{"status": "ok"}`.
    - Confirm no dependency on run store, SSE streams, or new agent routes.
 
@@ -168,205 +169,144 @@ This story performs an **audit** of existing endpoints and **regression testing*
 
 ### Test File: `agent/tests/test_backward_compat.py`
 
+**Total Test Count: 9**
+
 #### Test 1: AC-6 — POST /query with valid question returns blocking answer
 
-```python
-async def test_post_query_valid_question_returns_answer():
-    """Given a valid question, POST /query returns answer after process_question completes."""
-    # Setup: create test client, mock process_question to return {"answer": "The answer is 42"}
-    # When: POST /query with {"question": "What is the ultimate answer?"}
-    # Then: response status 200, body {"answer": "The answer is 42"}
-    # And: response is delayed by process_question latency (blocking behavior)
-```
-
-**Verification:**
-- Response status is 200.
+**Condition:** Valid question input  
+**Verify:**
+- Response status is HTTP 200.
 - Response body contains `"answer": "<text>"` (exact match with mock return).
-- Response elapsed time >= mock `process_question` latency (confirms blocking).
+- Response elapsed time ≥ mock `process_question` latency (confirms blocking behavior).
+- `process_question` was invoked and completed before response returned.
 
 #### Test 2: AC-6 — POST /query with error condition returns error blocking
 
-```python
-async def test_post_query_error_returns_error():
-    """Given a question that causes error, POST /query returns error after process_question completes."""
-    # Setup: mock process_question to return {"error": "MCP unavailable"}
-    # When: POST /query with {"question": "Why did it fail?"}
-    # Then: response status 200, body {"error": "MCP unavailable"}
-    # And: response is delayed by process_question latency (blocking behavior)
-```
-
-**Verification:**
-- Response status is 200.
+**Condition:** Question that causes `process_question` to return error  
+**Verify:**
+- Response status is HTTP 200.
 - Response body contains `"error": "<message>"` (exact match with mock error).
-- Response elapsed time >= mock `process_question` latency (confirms blocking).
+- Response elapsed time ≥ mock `process_question` latency (confirms blocking behavior).
+- `process_question` was invoked and error returned before response sent.
 
 #### Test 3: AC-6 — POST /query latency unchanged (no regression from Stories 1–2)
 
-```python
-def test_post_query_latency_no_regression():
-    """Given POST /query, latency is unchanged from baseline (Stories 1–2 add no overhead)."""
-    # Setup: establish baseline latency from pre-Story-1 state (document in fixture or constant)
-    # When: POST /query is called N=10 times after Stories 1–2 implementation
-    # Then: mean latency after <= mean latency before + 10% tolerance
-```
+**Condition:** POST /query called 10 times after Stories 1–2 implementation  
+**Verify:**
+- Measure wall-clock elapsed time for each call (from request to response receipt).
+- Calculate mean latency post-implementation.
+- Load baseline latency from test fixture (established pre-Stories-1–2).
+- Assert `mean_post ≤ mean_baseline × 1.1` (10% tolerance for JIT, system variance).
+- Individual call latencies do not exceed baseline + 20% (outlier check).
 
-**Verification:**
-- Measure wall-clock time for 10 sequential POST /query calls.
-- Calculate mean latency for post-Stories-1–2 implementation.
-- Load baseline from fixture or test constant.
-- Assert `mean_post <= mean_baseline * 1.1` (10% tolerance for JIT, system variance).
+#### Test 4: AC-6 — GET /health returns ok with no side effects
 
-#### Test 4: AC-6 — GET /health returns ok
-
-```python
-async def test_get_health_returns_ok():
-    """Given GET /health, response is always ok with no side effects from Stories 1–2."""
-    # Setup: create test client
-    # When: GET /health is called
-    # Then: response status 200, body {"status": "ok"}
-```
-
-**Verification:**
-- Response status is 200.
-- Response body is exactly `{"status": "ok"}`.
-- No exception or error.
+**Condition:** GET /health called after Stories 1–2 implementation  
+**Verify:**
+- Response status is HTTP 200.
+- Response body is exactly `{"status": "ok"}` (no extra fields, case-sensitive match).
+- No exceptions or errors during call.
+- No impact on run store, event queues, or background tasks.
 
 #### Test 5: AC-6 — POST /query and POST /agent/query coexist without interference
 
-```python
-async def test_post_query_and_agent_query_coexist():
-    """Given both endpoints in same session, they work independently."""
-    # Setup: mock process_question to return {"answer": "Hello"}
-    # When: 
-    #   1. POST /agent/query with {"query": "agent query"}; capture agent_run_id
-    #   2. POST /query with {"question": "legacy query"}; verify blocks
-    #   3. GET /agent/runs/{agent_run_id}/events; open SSE and read 1 event
-    # Then:
-    #   1. Agent POST returns 200 immediately (< 100ms)
-    #   2. Query POST returns 200 blocking with answer
-    #   3. SSE delivers in_progress event (no corruption)
-```
-
-**Verification:**
-- Agent POST response time < 100ms, body contains `agent_run_id`.
-- Query POST response time >= mock latency, body contains `answer`.
-- SSE first event is `in_progress` with correct `run_id`.
-- No exceptions or global state corruption.
+**Condition:** Both endpoints active in same session; execute both in rapid succession  
+**Verify:**
+- POST /agent/query with valid query returns HTTP 200 immediately (< 100ms) with `agent_run_id`.
+- POST /query with valid question (in same session) returns HTTP 200 with blocking latency and correct answer.
+- SSE stream for returned `agent_run_id` delivers `in_progress` event as first event with correct `run_id`.
+- No global state corruption (run store, event queue, or handler state).
+- No route collision or mutual interference.
 
 #### Test 6: AC-6 — MCP called only from main process (no child processes)
 
-```python
-def test_mcp_called_from_main_process_only():
-    """Given the agent process, MCP calls originate only from main process."""
-    # Setup: instrument process_question or httpx client to capture process ID
-    # When: POST /query is called
-    # Then: all MCP HTTP calls originate from main FastAPI process PID
-    # And: no child processes appear during MCP call (verify via os.getpid() hook)
-```
-
-**Verification:**
-- Instrument `process_question` or MCP HTTP client to log `os.getpid()` on each call.
-- Verify logged PID matches the main FastAPI process PID (from test setup).
-- Confirm no child processes forked (query `psutil.Process.children()` or `ps` output).
+**Condition:** POST /query invoked after Stories 1–2 implementation  
+**Verify:**
+- Instrument `process_question` or MCP HTTP client to capture `os.getpid()` on each call.
+- Verify all captured PIDs match the main FastAPI process PID (no spawned children).
+- Confirm no child processes forked by background tasks (query via `psutil.Process().children()`).
+- Confirm no threads spawned for MCP calls (no `threading.Thread()` or `ThreadPoolExecutor`).
 
 #### Test 7: AC-6 — Tool names used in POST /query remain unchanged
 
-```python
-def test_tool_names_unchanged():
-    """Given existing tools, their names are unchanged from pre-Stories 1–2."""
-    # Setup: load tool definitions from agent codebase (typically in orchestrator.py or config)
-    # Load baseline tool names (document in test fixture or constant)
-    # When: audit tool registry in current codebase
-    # Then: current tool names match baseline exactly (no additions, removals, renames)
-```
-
-**Verification:**
+**Condition:** Tool registry in current codebase  
+**Verify:**
 - Extract tool names from `agent/orchestrator.py` or configuration (search for tool definitions).
-- Load baseline from test fixture (e.g., `BASELINE_TOOL_NAMES = ["web_search", "calculator"]`).
-- Assert current set == baseline set (exact match; no diffs).
+- Load baseline tool names from test fixture (established pre-Stories-1–2).
+- Assert current set equals baseline set (exact match; no additions, removals, or renames).
+- Verify tool signatures and parameters unchanged.
 
 #### Test 8: AC-6 — ID normalization logic unchanged
 
-```python
-def test_id_normalization_unchanged():
-    """Given any ID normalization in agent, behavior is unchanged."""
-    # Setup: if ID normalization exists in process_question or handlers, identify it
-    # Load baseline test inputs/outputs (document in fixture)
-    # When: apply normalization to baseline inputs in current codebase
-    # Then: outputs match baseline (no changes to normalization function or logic)
-```
-
-**Verification:**
-- Search codebase for ID normalization (e.g., slugify, lowercase, remove special chars).
-- If found:
-  - Apply to baseline test inputs (e.g., "Example Query" → expected output).
-  - Confirm output matches baseline (no logic changes).
-- If not found:
-  - Pass trivially (no normalization to change).
+**Condition:** Any ID normalization in agent (if present)  
+**Verify:**
+- Search codebase for ID normalization logic (e.g., slugify, lowercase, special char removal).
+- If found: apply to baseline test inputs and confirm outputs match baseline.
+- If not found: pass trivially (no normalization to regress).
+- No new normalization introduced by Stories 1–2.
 
 #### Test 9: AC-6 — MCP_URL configuration unchanged
 
-```python
-def test_mcp_url_configuration_unchanged():
-    """Given MCP_URL setting, it is unchanged from pre-Stories 1–2."""
-    # Setup: read MCP_URL from config (os.getenv("MCP_URL") or config file)
-    # Load baseline MCP_URL (document in test fixture or constant)
-    # When: audit current MCP_URL value
-    # Then: current value matches baseline (no configuration changes)
-```
-
-**Verification:**
-- Read `MCP_URL` from environment (e.g., `os.getenv("MCP_URL")`) or config file.
-- Load baseline from test fixture (e.g., `BASELINE_MCP_URL = "http://localhost:3000"`).
-- Assert current == baseline (exact string match).
-
----
-
-## Verify
-
-**Test Count:** 9 tests across AC-6 (see Test 1–9 above).
-
-**Story 3 (PER-45: 03-agent):** 9 tests verify existing POST /query and GET /health behavior, coexistence with new non-blocking endpoints, and PER-20 contract stability (tool names, MCP URL, process isolation).
-
-All tests are listed in this document.
+**Condition:** MCP_URL read from environment or config file  
+**Verify:**
+- Read `MCP_URL` from `os.getenv("MCP_URL")` or config file.
+- Load baseline MCP_URL from test fixture (established pre-Stories-1–2).
+- Assert current value equals baseline (exact string match, case-sensitive).
+- No config file modifications by Stories 1–2.
 
 ---
 
 ## Acceptance Criteria Verification Summary
 
 | AC | Test # | Condition | Pass Criteria |
-|----|----|-----------|---------------|
-| AC-6 | 1, 2 | POST /query blocking behavior preserved | Returns `{"answer": "…"}` or `{"error": "…"}` blocking; response time includes full `process_question` latency |
-| AC-6 | 3, 5, 9 | POST /query latency and configuration unchanged | Mean latency no regression (≤ 10% tolerance); MCP_URL unchanged; coexist with new endpoints without interference |
-| AC-6 | 4 | GET /health unchanged | Returns `{"status": "ok"}` with no side effects |
-| AC-6 | 6, 7, 8 | Process isolation and tool configuration unchanged | MCP calls from main process only; tool names and ID normalization unchanged from baseline |
+|----|--------|-----------|---------------|
+| AC-6 | 1, 2 | POST /query blocking behavior preserved | Returns `{"answer": "…"}` or `{"error": "…"}` with blocking latency ≥ process_question time; response received after completion |
+| AC-6 | 3, 5, 9 | POST /query latency and configuration unchanged | Mean latency ≤ baseline + 10% tolerance; MCP_URL exact match to baseline; coexists with new endpoints without interference |
+| AC-6 | 4 | GET /health unchanged | Returns exactly `{"status": "ok"}`; no side effects from Stories 1–2 |
+| AC-6 | 6, 7, 8 | Process isolation and tool configuration unchanged | All MCP calls originate from main process PID only; no child processes; tool names and ID normalization exact match to baseline |
 
-**Total Test Count: 9**
+**All 9 tests cover AC-6 acceptance criteria from the ticket and requirements.md**
 
 ---
 
 ## Notes
 
-- **No code changes to existing endpoints.** This story is audit + testing only. All assertions confirm pre-Stories-1–2 behavior is preserved.
-- **Baseline establishment:** Tests 3, 7, 8, 9 require baseline values captured from pre-Stories-1–2 state. Document baselines in test fixtures (e.g., `conftest.py` or module-level constants).
-- **Coexistence test (Test 5):** Critical verification that Stories 1–2 do not corrupt global state or interfere with legacy endpoint when both are active in same session.
-- **MCP process isolation (Test 6):** Verifies no threading or multiprocessing overhead introduced by background tasks (Stories 1–2 must use only `asyncio.create_task()`, not `Thread()`, `Process()`, or `ThreadPoolExecutor`).
-- **Latency regression (Test 3):** 10% tolerance allows for normal variance (JIT compilation, system load); only fails if Stories 1–2 add significant overhead (e.g., global lock, sync work in request path).
+- **No code changes to existing endpoints.** This story is audit and testing only. All assertions confirm pre-Stories-1–2 behavior is preserved.
+- **Baseline establishment:** Tests 3, 7, 8, 9 require baseline values captured from pre-Stories-1–2 state. Document baselines in test fixtures (e.g., `conftest.py` or module-level constants). Baseline values:
+  - Test 3 baseline: Mean latency of 10 POST /query calls before Stories 1–2 implementation.
+  - Test 7 baseline: Tool name set extracted from pre-implementation codebase.
+  - Test 8 baseline: ID normalization test cases and expected outputs from pre-implementation.
+  - Test 9 baseline: MCP_URL environment variable value from pre-implementation state.
+- **Coexistence test (Test 5):** Critical verification that Stories 1–2 do not corrupt global state or interfere with legacy endpoint when both are active in the same session. Executes both endpoints in rapid succession (within same app lifecycle).
+- **MCP process isolation (Test 6):** Verifies no threading or multiprocessing overhead introduced by background tasks. Stories 1–2 must use only `asyncio.create_task()`, not `Thread()`, `Process()`, or `ThreadPoolExecutor`. Inspect runtime PID and process tree.
+- **Latency regression (Test 3):** 10% tolerance allows for normal variance (JIT compilation, system load); only fails if Stories 1–2 add significant overhead (e.g., global lock, synchronous work in request path). Outlier check (20% threshold) catches individual slow requests.
 - **Out of scope:** Auth (same as AC-6 and PER-20), rate limiting, metrics/logging beyond test assertions.
+- **Routes location:** Per `change_requests.md`, all routes (POST /agent/query, GET /agent/runs/{id}/events, existing POST /query, GET /health) are registered in `agent/main.py` only. No separate routes module. Verify by code inspection: no `agent/routes/`, `agent/routers/`, or `agent/src/` directories created.
+- **Preserved modules:** `agent/orchestrator.py`, `agent/health.py`, `agent/mcp_client.py` are not modified by Stories 1–2; audit verifies this constraint by file modification check (git diff or filesystem timestamp).
+- **PER-20 contract stability:** Tests 1, 2, 6, 7, 8, 9 depend on the PER-20 `process_question` contract remaining stable. Expected return type: `{"answer": "<text>"}` (on success) or `{"error": "<message>"}` (on error). Any change to this contract breaks AC-6. Recommend locking contract in PER-20 ticket or creating explicit test for return type validation.
+- **Baseline fixtures example:** In `conftest.py` or test module constants:
+  ```python
+  BASELINE_QUERY_LATENCY_MS = 100.0  # Mean from pre-implementation runs
+  BASELINE_TOOL_NAMES = {"weather", "search", "calculator"}  # Tool set
+  BASELINE_MCP_URL = "http://localhost:3001"  # MCP server URL
+  ```
 
 ---
 
 ## Dependencies
 
-- **On Stories 1–2:** This story verifies they do not break existing behavior. Run after Stories 1–2 are complete.
-- **On PER-20:** Existing `process_question` contract is stable (no changes).
-- **On baseline fixtures:** Tests 3, 7, 8, 9 require baseline values established before Stories 1–2 implementation. Document in test fixtures or test constants.
+- **On Stories 1–2:** This story verifies they do not break existing behavior. Execute after Stories 1–2 are complete and all their tests pass.
+- **On PER-20:** Existing `process_question` contract is stable (no changes required). If PER-20 modifies return type or behavior, AC-6 tests will fail; coordinate with PER-20 owner to ensure backward compatibility.
+- **On baseline fixtures:** Tests 3, 7, 8, 9 require baseline values established before Stories 1–2 implementation. Document in test fixtures or test constants. Without baselines, these tests cannot run (will raise `KeyError` or `AssertionError` on missing fixture).
 
 ---
 
-## Key Invariants (from change_requests.md)
+## Implementation Constraints
 
-- **Routes location:** POST /agent/query and GET /agent/runs/{id}/events are registered in `agent/src/main.py` (no separate routes file).
-- **Existing endpoints:** POST /query and GET /health stay in `agent/src/main.py` with no changes to handlers.
-- **Preserved modules:** `agent/src/agent/orchestrator.py`, `agent/src/agent/health.py`, `agent/src/agent/mcp_client.py` are not modified by Stories 1–2.
-- **Stack:** Python 3.11+, FastAPI, asyncio (no new external dependencies beyond PER-20 baseline).
+- All routes registered in `agent/main.py` only (per `change_requests.md`).
+- No new files created in this story except `agent/tests/test_backward_compat.py`.
+- No modifications to `agent/orchestrator.py`, `agent/health.py`, or `agent/mcp_client.py`.
+- No modifications to `agent/main.py` route handlers; audit only (no code changes).
+- Baseline fixtures must be established and documented before test execution.
+- Test execution order: After Stories 1–2 complete; before epic marked done.
+```

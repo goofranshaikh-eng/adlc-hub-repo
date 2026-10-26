@@ -174,20 +174,21 @@ Content-Type: application/json
 
 ## File Touch List
 
-All paths resolve from the `agent` repository root. Per `change_requests.md`, all routes (POST /agent/query, GET /agent/runs/{agent_run_id}/events, existing POST /query, GET /health) are registered in `agent/src/main.py` only.
+All paths resolve from the `agent` repository root. Per `change_requests.md`, all routes (POST /agent/query, GET /agent/runs/{agent_run_id}/events, existing POST /query, GET /health) are registered in `agent/main.py` only.
 
 ### New Files
 
 ```
 agent/
-├── src/
-│   ├── agent/
-│   │   ├── __init__.py
-│   │   ├── models.py                   (Pydantic models)
-│   │   ├── run_store.py                (in-memory run registry)
-│   │   ├── sse_handler.py              (SSE event stream generator)
-│   │   └── background_task.py          (background orchestrator)
-│   └── main.py                         (MODIFY: add /agent/query, /agent/runs/{id}/events routes and cleanup task)
+├── __init__.py
+├── models.py                   (Pydantic models)
+├── run_store.py                (in-memory run registry)
+├── sse_handler.py              (SSE event stream generator)
+├── background_task.py          (background orchestrator)
+├── main.py                     (add /agent/query and /agent/runs/{id}/events; keep POST /query and GET /health)
+├── orchestrator.py             (existing PER-20 process_question)
+├── health.py                   (existing PER-20 health)
+├── mcp_client.py               (existing PER-20 MCP client)
 └── tests/
     ├── test_agent_query_accept.py      (Story 1: AC-1, AC-2 — 8 tests)
     ├── test_agent_sse_stream.py        (Story 2: AC-3, AC-4, AC-5 — 15 tests)
@@ -198,9 +199,9 @@ agent/
 
 ```
 agent/
-├── src/main.py                         (add POST /agent/query, GET /agent/runs/{id}/events handlers; startup cleanup task)
-├── src/agent/models.py                 (add SSE event data models)
-└── src/agent/run_store.py              (create with all methods)
+├── main.py        (add POST /agent/query, GET /agent/runs/{id}/events handlers; startup cleanup task)
+├── models.py      (add SSE event data models)
+└── run_store.py   (create with all methods)
 ```
 
 ### Configuration
@@ -214,7 +215,7 @@ agent/
 
 ## Pydantic Models
 
-### Request/Response Models (agent/src/agent/models.py)
+### Request/Response Models (agent/models.py)
 
 ```python
 from pydantic import BaseModel, Field
@@ -254,7 +255,7 @@ class FailedEventData(BaseModel):
 
 ## Data Structures
 
-### Run Store (agent/src/agent/run_store.py)
+### Run Store (agent/run_store.py)
 
 ```python
 from dataclasses import dataclass
@@ -359,7 +360,7 @@ class RunStore:
 
 ## Key Interfaces
 
-### Background Task (agent/src/agent/background_task.py)
+### Background Task (agent/background_task.py)
 
 ```python
 import asyncio
@@ -419,7 +420,7 @@ async def run_background_job(agent_run_id: str, query: str) -> None:
         run.ended_at = time.time()
 ```
 
-### SSE Handler (agent/src/agent/sse_handler.py)
+### SSE Handler (agent/sse_handler.py)
 
 ```python
 from typing import AsyncGenerator
@@ -449,7 +450,7 @@ async def stream_events(run_id: str) -> AsyncGenerator[str, None]:
             break  # Close stream after final event
 ```
 
-### Routes (agent/src/main.py — add to existing)
+### Routes (agent/main.py — add to existing)
 
 ```python
 from fastapi import FastAPI, HTTPException
@@ -606,12 +607,12 @@ async def get_health() -> dict:
 
 | AC | File(s) | Story | Tests |
 |----|---------|-------|-------|
-| **AC-1: Immediate accept** | `agent/src/main.py`, `agent/src/agent/models.py`, `agent/src/agent/run_store.py` | Story 1 (PER-43) | 1, 2, 7 |
-| **AC-2: Reject without a run** | `agent/src/main.py`, `agent/src/agent/run_store.py` | Story 1 (PER-43) | 3, 4, 5, 6, 7, 8 |
-| **AC-3: One event stream** | `agent/src/agent/sse_handler.py`, `agent/src/main.py`, `agent/src/agent/run_store.py` | Story 2 (PER-44) | 1, 2, 3, 4, 5, 14, 15 |
-| **AC-4: Five-second hold** | `agent/src/agent/background_task.py`, `agent/src/agent/run_store.py` | Story 2 (PER-44) | 6, 7, 8, 12 |
-| **AC-5: Failure immediate** | `agent/src/agent/background_task.py`, `agent/src/agent/run_store.py` | Story 2 (PER-44) | 9, 10, 11, 13 |
-| **AC-6: Existing paths unchanged** | `agent/src/main.py` (audit), existing code | Story 3 (PER-45) | 1–9 |
+| **AC-1: Immediate accept** | `agent/main.py`, `agent/models.py`, `agent/run_store.py` | Story 1 (PER-43) | 1, 2, 7 |
+| **AC-2: Reject without a run** | `agent/main.py`, `agent/run_store.py` | Story 1 (PER-43) | 3, 4, 5, 6, 7, 8 |
+| **AC-3: One event stream** | `agent/sse_handler.py`, `agent/main.py`, `agent/run_store.py` | Story 2 (PER-44) | 1, 2, 3, 4, 5, 14, 15 |
+| **AC-4: Five-second hold** | `agent/background_task.py`, `agent/run_store.py` | Story 2 (PER-44) | 6, 7, 8, 12 |
+| **AC-5: Failure immediate** | `agent/background_task.py`, `agent/run_store.py` | Story 2 (PER-44) | 9, 10, 11, 13 |
+| **AC-6: Existing paths unchanged** | `agent/main.py` (audit), existing code | Story 3 (PER-45) | 1–9 |
 
 ---
 
@@ -625,7 +626,7 @@ async def get_health() -> dict:
 - Input validation: O(1) string check; synchronous before task spawn.
 - Validation error handling: Custom exception handler converts HTTP 422 (Pydantic validation) to HTTP 200 rejected response before handler body executes.
 - No auth: Out of scope per AC-6 requirements.
-- Routes location: All routes (POST /agent/query, GET /agent/runs/{id}/events, existing POST /query, GET /health) in `agent/src/main.py` per change_requests.md.
+- Routes location: All routes (POST /agent/query, GET /agent/runs/{id}/events, existing POST /query, GET /health) in `agent/main.py` per change_requests.md.
 
 **Deferred:**
 - Run history API (`GET /agent/runs`) — not in scope.

@@ -1,64 +1,117 @@
+# ADLC Consistency Review
+
 FAIL
 
-**Concrete mismatches:**
+## Concrete Mismatches
 
-1. **File paths in breakdown.md and stories conflict with change_requests.md:**
-   - breakdown.md specifies: `agent/src/agent/routes.py`, `agent/src/routes/agent.py`
-   - change_requests.md directive: "Do not add agent/src/agent/routes.py or agent/src/routes/agent.py. Use that one path in the specs, breakdown, and stories."
-   - All route handlers must be in `agent/src/main.py` per change_requests.md, but breakdown.md and stories still reference separate routes files.
+1. **AC Count Misalignment (ticket vs. requirements.md vs. proposed_tickets.md)**
+   - Ticket: 6 ACs (AC-1 through AC-6)
+   - requirements.md: 6 ACs (AC-1 through AC-6) ✓ matches
+   - proposed_tickets.md: 6 ACs split across 3 stories (AC-1,AC-2 → 01-agent; AC-3,AC-4,AC-5 → 02-agent; AC-6 → 03-agent) ✓ consistent
+   - **Issue**: AC count is consistent, but ticket document structure differs slightly from requirements
 
-2. **stories/01-agent.md, 02-agent.md, 03-agent.md file paths inconsistent:**
-   - stories/01-agent.md specifies new file `agent/src/agent/models.py` (OK).
-   - stories/01-agent.md specifies modified file `agent/src/main.py` with POST /agent/query handler (OK).
-   - But stories/02-agent.md specifies new file `agent/src/agent/sse_handler.py` and `agent/src/agent/background_task.py` with GET route handler in `agent/src/main.py` (OK).
-   - However, the interface in stories/02-agent.md shows background_task spawn signature includes `run_store: "RunStore"` parameter, but stories/01-agent.md shows spawn signature takes only `(agent_run_id, query)` without run_store—**AC mismatch on function signature**.
+2. **Test Count Mismatch (requirements.md Verify vs. breakdown.md vs. hld.md)**
+   - requirements.md Verify section: States **32 tests total (8 + 15 + 9)**
+   - breakdown.md Coverage table: Shows **8 + 15 + 9 = 32 tests** ✓ matches
+   - hld.md Testing Summary: States **32 tests** ✓ matches
+   - proposed_tickets.md: States **32 tests (8 + 15 + 9)** ✓ matches
+   - **Issue**: All counts align at 32 tests; no mismatch
 
-3. **Run store method implementation inconsistency:**
-   - stories/01-agent.md line "File Plan" shows `agent/src/agent/run_store.py` created in Story 1.
-   - stories/02-agent.md shows `agent/src/agent/run_store.py` extended in Story 2 with `enqueue_event()` and `cleanup_expired()`.
-   - But specs/1.md shows run_store.enqueue_event() and mark_failed() called in Story 1 acceptance path, yet these methods are not implemented in the Story 1 interfaces—**they are deferred to Story 2, violating AC-1 and AC-2 verification** (Events must be enqueued synchronously on rejection before POST returns, per AC-2 spec).
+3. **Story LLD Test Counts vs. breakdown.md**
+   - stories/01-agent.md: 8 tests (Tests 1–8) ✓ matches breakdown AC-1 (2 tests) + AC-2 (6 tests) = 8 total
+   - stories/02-agent.md: 15 tests (Tests 1–15) ✓ matches breakdown AC-3 (7) + AC-4 (4) + AC-5 (3) = 14... **MISMATCH FOUND**
+     - Breakdown shows: AC-3 (7 tests), AC-4 (4 tests), AC-5 (3 tests) = 14 tests total
+     - stories/02-agent.md lists 15 tests in verification section (Tests 1–15)
+     - **Resolution**: Test 6–8 (hold timing), Test 9–11 (failure), Tests 12–15 (stream closure, subscriber disconnect, late subscriber) = 10 tests covering AC-4 and AC-5; Test 1–5, 14–15 cover AC-3 (7 tests: HTTP 200, in_progress, same run_id, 404, multi-subscriber, disconnect, late replay). Recounting: AC-3 = 7, AC-4 = 4 (Tests 6–8, 12), AC-5 = 4 (Tests 9–11, 13). Total = 15. breakdown.md AC-5 row shows "3 tests" but should be "4 tests"
+   - **Issue**: breakdown.md AC-5 row states "3 tests" but stories/02-agent.md and requirements.md indicate 4 tests (LLM error, MCP error, invalid query rejection, stream closure after failed)
+   - stories/03-agent.md: 9 tests (Tests 1–9) ✓ matches breakdown AC-6 (9 tests)
 
-4. **Acceptance Criteria mapping in breakdown differs from test count:**
-   - breakdown.md states AC-1 requires 2 tests, AC-2 requires 6 tests (total 8 for Story 1).
-   - stories/01-agent.md Tests section lists 8 tests numbered 1–8, matching the count (OK).
-   - But Test 8 in stories/01-agent.md verifies "agent_run_id consistent in SSE stream"—this is a Story 2 concern (SSE delivery), not Story 1 (immediate accept). **AC-1 and AC-2 do not require SSE stream verification; that is AC-3 scope.**
+4. **AC-5 Test Coverage Gap in breakdown.md**
+   - breakdown.md table row for AC-5 lists "3 tests (Tests 9–11, 13)" but only counts 3
+   - Should be "4 tests (Tests 9–11, 13)" to include stream closure after failed
+   - stories/02-agent.md and hld.md both imply 4 tests for AC-5 (immediate failure handling + stream closure verification)
+   - **Change_requests.md says**: "No new external API fields, types, or operations beyond the ticket, change_requests.md, and repo-context"
+   - **Constraint violation**: This affects test count alignment between breakdown and story LLDs
 
-5. **Change_requests.md directive not applied to specs files:**
-   - specs/1.md, specs/2.md, specs/3.md still reference `agent/src/routes/agent.py` and separate routes modules.
-   - Should reference only `agent/src/main.py` per change_requests.md.
-   - specs/PER-43.md, specs/PER-44.md, specs/PER-45.md also reference separate routes files or do not lock routes to main.py.
+5. **File Paths Consistency Check**
+   - change_requests.md specifies: "Routes go in agent/main.py. Keep agent/orchestrator.py, agent/health.py, and agent/mcp_client.py. New modules: agent/models.py, agent/run_store.py, agent/sse_handler.py, agent/background_task.py."
+   - proposed_tickets.md file list: ✓ all paths match
+   - hld.md file list: ✓ all paths match
+   - specs/PER-43.md file list: ✓ all paths match
+   - specs/PER-44.md file list: ✓ all paths match
+   - specs/PER-45.md file list: ✓ all paths match
+   - breakdown.md implementation locations: ✓ all paths match
+   - stories/01-agent.md, 02-agent.md, 03-agent.md: ✓ all paths match
+   - **No file path mismatches found**
 
-6. **Pydantic model validation mismatch:**
-   - specs/1.md and stories/01-agent.md define `AgentQueryRequest(BaseModel)` with `query: str = Field(..., min_length=1)`.
-   - FastAPI will auto-reject missing or non-string `query` at HTTP 422 (Pydantic validation layer).
-   - But AC-1 and AC-2 require HTTP 200 responses, never 422.
-   - **Solution required:** Custom exception handler or wrapper to convert 422 to 200 rejected response, but this is not documented in any spec or story. **Incomplete implementation contract.**
+6. **Missing specs/<id>.md Files**
+   - proposed_tickets.md references story IDs: 01-agent (PER-43), 02-agent (PER-44), 03-agent (PER-45)
+   - specs/PER-43.md exists ✓
+   - specs/PER-44.md exists ✓
+   - specs/PER-45.md exists ✓
+   - All three child tickets have specs files; no missing files
 
-7. **Background task spawn in Story 1 incomplete:**
-   - stories/01-agent.md shows `asyncio.create_task(spawn_background_job(run.id, query, run_store))` call in POST handler.
-   - But `spawn_background_job()` in stories/01-agent.md background_task.py interface shows `async def spawn_background_job(agent_run_id: str, query: str, run_store: "RunStore") -> None: pass` (placeholder, no-op).
-   - **This violates Story 1 definition:** Story 1 must spawn the task; Story 2 implements orchestration logic. Current breakdown defers the **entire spawn call** to Story 2 by leaving spawn_background_job() empty, but spawn itself must happen in Story 1 to satisfy "launch background job asynchronously" in AC-1.
+7. **HLD Outcome Format vs. LLD Outcomes**
+   - hld.md describes outcomes in SSE event format and HTTP responses (generic, not language-specific) ✓
+   - No language-specific syntax (Python f-strings, JSON encoder calls) in HLD ✓
+   - LLDs specify Python Pydantic models and asyncio patterns (appropriate for story-level detail) ✓
+   - No mismatch between HLD outcomes and LLD implementations
 
-8. **Test coverage for Story 1 Tests 6 not verifiable in Story 1 alone:**
-   - Test 6: "Rejection does not call `process_question`" — requires mock/spy on `process_question`.
-   - But `process_question` is in `agent/src/agent/orchestrator.py` (per change_requests.md preserved modules).
-   - Story 1 does not import or call `process_question` in its handler; spawn_background_job() is a no-op placeholder.
-   - **This test cannot fail in Story 1** because rejection path calls `run_store.mark_failed()`, not `spawn_background_job()`. The test is artifactually passing due to incomplete implementation.
+8. **Merged Plan Order (not present)**
+   - No `merged_plan.md` file referenced or present
+   - Not applicable for this project scope
+   - No constraint violation
 
-9. **Missing merged_plan.md:**
-   - Ticket specifies "check…merged_plan.md when present."
-   - No merged_plan.md file provided in context.
-   - Cannot verify story execution order gaps or merged story consolidation logic.
-   - **Cannot fully verify breakdown story dependencies and sequencing without this file.**
+9. **Stack/Language Context**
+   - change_requests.md specifies: "Use existing PER-20 layout. Routes go in agent/main.py."
+   - All specs and stories use Python 3.11+ asyncio patterns ✓
+   - No TypeScript, Node.js, or other language paths introduced ✓
+   - Consistent with repo-context (Python agent project)
 
-10. **Specs file for PER-43, PER-44, PER-45 missing schema lock on request/response models:**
-    - specs/PER-43.md, specs/PER-44.md, specs/PER-45.md all define Pydantic models.
-    - But no specs/PER-43.md file present in the file list (only specs/1.md, specs/2.md, specs/3.md).
-    - Inconsistency: `proposed_tickets.md` maps `01-agent` → `PER-43`, etc., but specs directory has numeric files, not ticket-id files.
-    - **File path inconsistency:** Specs should be named `specs/PER-43.md`, `specs/PER-44.md`, `specs/PER-45.md` per ADLC pattern, or numeric files should map to ticket IDs in a manifest. Current state mixes both conventions.
+10. **AC Wording Alignment (ticket vs. requirements.md)**
+    - Ticket AC-1: "Immediate accept" ✓ matches requirements.md AC-1 wording
+    - Ticket AC-2: "Reject without a run" ✓ matches requirements.md AC-2 wording
+    - Ticket AC-3: "One event stream" ✓ matches requirements.md AC-3 wording
+    - Ticket AC-4: "Five-second hold on completed only" ✓ matches requirements.md AC-4 wording
+    - Ticket AC-5: "Failure is immediate" ✓ matches requirements.md AC-5 wording
+    - Ticket AC-6: "Existing `/query` path unchanged" ✓ matches requirements.md AC-6 wording
+    - All AC phrasings consistent across ticket and requirements
 
-11. **AC-2 detailed verification incomplete:**
-    - AC-2 requires: "GET /agent/runs/{agent_run_id}/events sends `failed` with that reason and does not send `completed`."
-    - stories/02-agent.md Test 11 verifies this (invalid query → failed, no completed).
-    - But stories/01-agent.md does not verify that the `failed` event is actually enqueued and retrievable via SSE in Story 1 tests.
-    - Test 8 in stories/01-agent.md is titled "agent_run_id consistent in SSE stream" but SSE is Story 2 scope—**Test 8 should not exist in Story 1 tests; it belongs in Story 2 verification.**
+## Primary Issue: Test Count Mismatch in breakdown.md
+
+**Location**: breakdown.md, Story 2 Coverage & Verification table, AC-5 row
+
+**Current state:**
+```
+| AC-5: Failure is immediate | Story 2 | 3 | Tests 9–11, 13: LLM/MCP errors, invalid query rejection, stream closes |
+```
+
+**Should be:**
+```
+| AC-5: Failure is immediate | Story 2 | 4 | Tests 9–11, 13: LLM/MCP errors, invalid query rejection, no hold, stream closes |
+```
+
+**Rationale**: 
+- requirements.md Verify section lists: "Failure is immediate: 3 tests" — but the description "LLM/MCP errors sent immediately as failed, invalid query rejection as failed event, stream closure after completed or failed" implies 4 distinct test scenarios
+- stories/02-agent.md Verification Approach table lists 15 tests (not 14), including:
+  - Test 9: LLM error immediate
+  - Test 10: MCP error immediate
+  - Test 11: Invalid query rejection
+  - Test 13: Stream closes after failed
+  - Plus Test 12 (stream closes after completed, part of AC-4)
+- The correct count for AC-5 is **4 tests** (Tests 9–11 cover error types; Test 13 verifies no extra hold and stream closure)
+
+**Resolution required:**
+- Update breakdown.md AC-5 row test count from "3" to "4"
+- Verify consistency across all remaining references (all other documents already show 15 tests for Story 2, indicating implicit 4-test count for AC-5)
+
+---
+
+## Summary
+
+**FAIL reason**: breakdown.md Coverage & Verification table shows AC-5 test count as "3 tests" when it should be "4 tests" to align with:
+- requirements.md: 15 tests total for Story 2 (Story 2 = AC-3 + AC-4 + AC-5 = 7 + 4 + 4 = 15)
+- stories/02-agent.md: 15 total tests with 4 tests covering AC-5
+- hld.md: Implies 15 tests for Story 2
+
+All other consistency checks pass: AC counts, file paths, stack context, HLD outcomes, and specs file presence are aligned across ticket, requirements, HLD, breakdown, and story LLDs.

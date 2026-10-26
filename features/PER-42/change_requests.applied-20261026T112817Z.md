@@ -1,0 +1,1 @@
+Use the existing PER-20 layout. Routes go in agent/main.py. Keep agent/orchestrator.py, agent/health.py, and agent/mcp_client.py. New modules sit beside those files: agent/models.py, agent/run_store.py, agent/sse_handler.py, and agent/background_task.py. Do not add an agent/src tree.

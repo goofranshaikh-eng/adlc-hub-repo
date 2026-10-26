@@ -165,14 +165,15 @@ All paths resolve from the `agent` repository root.
 
 ```
 agent/
-├── src/
-│   ├── agent/
-│   │   ├── __init__.py
-│   │   ├── models.py                # Pydantic request/response models
-│   │   ├── run_store.py             # In-memory run registry + event queue management
-│   │   ├── sse_handler.py           # SSE event generator
-│   │   └── background_task.py       # Background orchestrator; calls process_question
-│   └── main.py                      # (modify: register agent routes, add cleanup task)
+├── __init__.py
+├── models.py                # Pydantic request/response models
+├── run_store.py             # In-memory run registry + event queue management
+├── sse_handler.py           # SSE event generator
+├── background_task.py       # Background orchestrator; calls process_question
+├── main.py                  # register POST /agent/query and GET /agent/runs/{id}/events
+├── orchestrator.py          # existing PER-20 process_question
+├── health.py                # existing PER-20 health
+├── mcp_client.py            # existing PER-20 MCP client
 └── tests/
     ├── test_agent_query_accept.py   # Tests for AC-1, AC-2 (8 tests)
     ├── test_agent_sse_stream.py     # Tests for AC-3, AC-4, AC-5 (15 tests)
@@ -183,17 +184,17 @@ agent/
 
 ```
 agent/
-├── src/main.py                      # Add POST /agent/query and GET /agent/runs/{id}/events handlers; add cleanup task startup
-├── src/agent/models.py              # Add SSE event data models
-├── src/agent/run_store.py           # Extend with cleanup method and event queue management
-└── requirements.txt                 # Verify FastAPI, uvicorn, pydantic, httpx present
+├── main.py            # Add POST /agent/query and GET /agent/runs/{id}/events handlers; add cleanup task startup
+├── models.py          # Add SSE event data models
+├── run_store.py       # Extend with cleanup method and event queue management
+└── requirements.txt   # Verify FastAPI, uvicorn, pydantic, httpx present
 ```
 
 ---
 
 ## Pydantic Models
 
-### Request/Response Models (`agent/src/agent/models.py`)
+### Request/Response Models (`agent/models.py`)
 
 ```python
 from pydantic import BaseModel, Field
@@ -233,7 +234,7 @@ class FailedEventData(BaseModel):
 
 ## Run Store Data Structure
 
-### Run Object (`agent/src/agent/run_store.py`)
+### Run Object (`agent/run_store.py`)
 
 ```python
 from dataclasses import dataclass
@@ -254,7 +255,7 @@ class Run:
     in_progress_sent_at: Optional[float] = None
 ```
 
-### RunStore Interface (`agent/src/agent/run_store.py`)
+### RunStore Interface (`agent/run_store.py`)
 
 ```python
 class RunStore:
@@ -309,12 +310,12 @@ class RunStore:
 
 | AC | File(s) | Methods/Functions | Tests (count) |
 |----|---------|---|---|
-| **AC-1: Immediate accept** | `agent/src/main.py`, `agent/src/agent/models.py`, `agent/src/agent/run_store.py` | `POST /agent/query` handler, `run_store.create()`, `asyncio.create_task()` | test_agent_query_accept.py (2 tests) |
-| **AC-2: Reject without a run** | `agent/src/main.py`, `agent/src/agent/run_store.py` | Input validation, `run_store.mark_failed()` | test_agent_query_accept.py (6 tests) |
-| **AC-3: One event stream** | `agent/src/agent/sse_handler.py`, `agent/src/main.py` | `GET /agent/runs/{id}/events`, `stream_events()` | test_agent_sse_stream.py (7 tests) |
-| **AC-4: Five-second hold** | `agent/src/agent/background_task.py`, `agent/src/agent/run_store.py` | `run_background_job()`, 5-second hold calculation | test_agent_sse_stream.py (4 tests) |
-| **AC-5: Failure is immediate** | `agent/src/agent/background_task.py` | Exception handling in background task, `enqueue_event("failed", ...)` | test_agent_sse_stream.py (3 tests) |
-| **AC-6: Existing paths unchanged** | `agent/src/main.py` (audit only) | `POST /query`, `GET /health` | test_backward_compat.py (9 tests) |
+| **AC-1: Immediate accept** | `agent/main.py`, `agent/models.py`, `agent/run_store.py` | `POST /agent/query` handler, `run_store.create()`, `asyncio.create_task()` | test_agent_query_accept.py (2 tests) |
+| **AC-2: Reject without a run** | `agent/main.py`, `agent/run_store.py` | Input validation, `run_store.mark_failed()` | test_agent_query_accept.py (6 tests) |
+| **AC-3: One event stream** | `agent/sse_handler.py`, `agent/main.py` | `GET /agent/runs/{id}/events`, `stream_events()` | test_agent_sse_stream.py (7 tests) |
+| **AC-4: Five-second hold** | `agent/background_task.py`, `agent/run_store.py` | `run_background_job()`, 5-second hold calculation | test_agent_sse_stream.py (4 tests) |
+| **AC-5: Failure is immediate** | `agent/background_task.py` | Exception handling in background task, `enqueue_event("failed", ...)` | test_agent_sse_stream.py (4 tests) |
+| **AC-6: Existing paths unchanged** | `agent/main.py` (audit only) | `POST /query`, `GET /health` | test_backward_compat.py (9 tests) |
 
 **Total Test Count: 32** (8 + 15 + 9)
 
@@ -530,10 +531,10 @@ AGENT_COMPLETE_HOLD_SECONDS=5         # 5-second hold on completed events (defau
 
 ### Startup Behavior
 
-All routes (POST /agent/query, GET /agent/runs/{id}/events, existing POST /query, GET /health) are registered in `agent/src/main.py` with cleanup task startup:
+All routes (POST /agent/query, GET /agent/runs/{id}/events, existing POST /query, GET /health) are registered in `agent/main.py` with cleanup task startup:
 
 ```python
-# In agent/src/main.py:
+# In agent/main.py:
 
 # 1. Register routes (no separate routes module per change_requests.md)
 @app.post("/agent/query", response_model=AgentQueryAccepted | AgentQueryRejected)
@@ -602,7 +603,7 @@ PER-28 consumes SSE events as published by this ticket's `GET /agent/runs/{agent
 All 6 acceptance criteria are fully covered by the 32 tests across 3 stories:
 
 ✓ **AC-1:** Immediate accept (Tests 1–2 in Story 1)  
-✓ **AC-2:** Reject without a run (Tests 3–7 in Story 1)  
+✓ **AC-2:** Reject without a run (Tests 3–8 in Story 1)  
 ✓ **AC-3:** One event stream (Tests 1–5, 14–15 in Story 2)  
 ✓ **AC-4:** Five-second hold (Tests 6–8, 12 in Story 2)  
 ✓ **AC-5:** Failure is immediate (Tests 9–11, 13 in Story 2)  

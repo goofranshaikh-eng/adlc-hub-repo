@@ -39,36 +39,32 @@ All paths resolve from the `agent` repository root.
 
 ```
 agent/
-├── src/
-│   ├── agent/
-│   │   ├── sse_handler.py
-│   │   └── background_task.py
-│   └── main.py (extend with GET route and cleanup task startup)
+├── sse_handler.py
+├── background_task.py
 └── tests/
     └── test_agent_sse_stream.py
 ```
 
 **Key files:**
 
-1. **`agent/src/agent/sse_handler.py`** — SSE stream reader and event formatter; yields `text/event-stream` format.
-2. **`agent/src/agent/background_task.py`** — Background orchestrator; calls `process_question`, enforces 5-second hold, enqueues result events.
-3. **`agent/src/main.py`** — Add `GET /agent/runs/{agent_run_id}/events` handler; extend with background cleanup task startup (TTL-based run expiration).
-4. **`agent/tests/test_agent_sse_stream.py`** — Unit and integration tests for AC-3, AC-4, AC-5.
+1. **`agent/sse_handler.py`** — SSE stream reader and event formatter; yields `text/event-stream` format.
+2. **`agent/background_task.py`** — Background orchestrator; calls `process_question`, enforces 5-second hold, enqueues result events.
+3. **`agent/tests/test_agent_sse_stream.py`** — Unit and integration tests for AC-3, AC-4, AC-5 (15 tests).
 
 ### Modified Files
 
 ```
 agent/
-├── src/agent/run_store.py (extend with cleanup_expired and enqueue_event methods)
-├── src/agent/models.py (add SSE event data models)
-└── src/main.py (add GET route handler and cleanup task startup)
+├── run_store.py (extend with cleanup_expired and enqueue_event methods)
+├── models.py (add SSE event data models)
+└── main.py (add GET /agent/runs/{agent_run_id}/events handler and cleanup task startup)
 ```
 
 ---
 
 ## Interfaces
 
-### Event Data Models (`agent/src/agent/models.py` — extend)
+### Event Data Models (`agent/models.py` — extend from Story 1)
 
 ```python
 from typing import Literal
@@ -89,13 +85,12 @@ class FailedEventData(BaseModel):
     error: str
 ```
 
-### SSE Handler Interface (`agent/src/agent/sse_handler.py`)
+### SSE Handler Interface (`agent/sse_handler.py`)
 
 ```python
 from typing import AsyncGenerator
 import json
 from fastapi import HTTPException
-from agent.run_store import run_store
 
 async def stream_events(run_id: str) -> AsyncGenerator[str, None]:
     """
@@ -109,8 +104,17 @@ async def stream_events(run_id: str) -> AsyncGenerator[str, None]:
     Second event is exactly one of (completed | failed).
     Stream closes after second event.
     
-    Raises HTTPException(404) if run_id not found.
+    Args:
+        run_id: agent_run_id to stream events for
+    
+    Yields:
+        SSE-formatted lines (event: ..., data: ..., blank line)
+    
+    Raises:
+        HTTPException(404) if run_id not found or expired
     """
+    from agent.run_store import run_store
+    
     run = await run_store.get(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -125,28 +129,36 @@ async def stream_events(run_id: str) -> AsyncGenerator[str, None]:
             break  # Close stream after final event
 ```
 
-### Background Task Interface (`agent/src/agent/background_task.py`)
+### Background Task Interface (`agent/background_task.py`)
 
 ```python
 import asyncio
 import time
-from agent.run_store import run_store
-from agent.orchestrator import process_question
 
 async def run_background_job(agent_run_id: str, query: str) -> None:
     """
     Execute process_question in background; enqueue events to run store.
     
     Calls:
-      1. run_store.get(agent_run_id)
-      2. process_question(query) (from PER-20)
-      3. Enforce 5-second hold for completed only
-      4. run_store.enqueue_event() for result
+      1. run_store.get(agent_run_id) to retrieve run
+      2. process_question(query) from PER-20 orchestrator
+      3. Enforces 5-second hold for completed events only (AC-4)
+      4. Enqueues result (completed or failed) to run_store (AC-5)
     
-    On error or LLM/MCP failure:
-      - Enqueue failed event immediately (no hold)
-      - Do not enqueue completed event
+    On success: Enqueues completed event after enforcing 5-second hold.
+    On error: Enqueues failed event immediately (no hold).
+    On exception: Catches and enqueues failed event with error message.
+    
+    Args:
+        agent_run_id: unique run identifier (UUID v4 hex)
+        query: user query string (already validated and stripped from AC-1, AC-2)
+    
+    Returns:
+        None (background execution; no return value to caller)
     """
+    from agent.run_store import run_store
+    from agent.orchestrator import process_question
+    
     run = await run_store.get(agent_run_id)
     if not run:
         return  # Run already cleaned up; abort silently
@@ -155,17 +167,18 @@ async def run_background_job(agent_run_id: str, query: str) -> None:
         run.started_at = time.time()
         
         # Call existing PER-20 orchestrator
+        # Expected return: {"answer": "<text>"} or {"error": "<message>"}
         result = await process_question(query)
         
         if "error" in result:
-            # Failure path (AC-5): send immediately
+            # Failure path (AC-5): enqueue failed immediately, no hold
             await run_store.enqueue_event(agent_run_id, "failed", {
                 "run_id": agent_run_id,
                 "error": result["error"]
             })
             run.status = "failed"
         else:
-            # Success path (AC-4): apply 5-second hold
+            # Success path (AC-4): apply 5-second hold before enqueuing completed
             elapsed = time.time() - run.in_progress_sent_at
             hold_remaining = 5.0 - elapsed
             
@@ -181,7 +194,7 @@ async def run_background_job(agent_run_id: str, query: str) -> None:
         run.result = result
     
     except Exception as e:
-        # Unhandled exception (AC-5): send failed immediately
+        # Unhandled exception (AC-5): enqueue failed immediately
         await run_store.enqueue_event(agent_run_id, "failed", {
             "run_id": agent_run_id,
             "error": str(e)
@@ -192,7 +205,7 @@ async def run_background_job(agent_run_id: str, query: str) -> None:
         run.ended_at = time.time()
 ```
 
-### Run Store Interface — Extensions (`agent/src/agent/run_store.py` — extend)
+### Run Store Interface — Extensions (`agent/run_store.py` — extend from Story 1)
 
 ```python
 import time
@@ -217,6 +230,9 @@ class RunStore:
         
         Called periodically by cleanup task on app startup.
         Default TTL: 1 hour.
+        
+        Args:
+            ttl_seconds: time-to-live in seconds (default 3600 = 1 hour)
         """
         now = time.time()
         expired_ids = [
@@ -227,13 +243,11 @@ class RunStore:
             del self._runs[run_id]
 ```
 
-### Route Handler — Extension (`agent/src/main.py` — add to existing app)
+### Route Handler — Extension (`agent/main.py` — add to existing app)
 
 ```python
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
-from agent.sse_handler import stream_events
-from agent.run_store import run_store
 import asyncio
 import os
 
@@ -246,7 +260,19 @@ async def get_agent_events(agent_run_id: str) -> StreamingResponse:
     
     - AC-3: Returns 200 text/event-stream if run exists; 404 if unknown.
     - AC-4, AC-5: Emits in_progress, then (completed | failed), with timing rules enforced.
+    
+    Args:
+        agent_run_id: unique run identifier (from POST /agent/query response)
+    
+    Returns:
+        StreamingResponse with SSE events
+    
+    Raises:
+        HTTPException(404) if run_id not found or expired
     """
+    from agent.run_store import run_store
+    from agent.sse_handler import stream_events
+    
     run = await run_store.get(agent_run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -263,6 +289,8 @@ async def get_agent_events(agent_run_id: str) -> StreamingResponse:
 # Cleanup task (TTL-based run expiration)
 async def cleanup_task():
     """Periodically delete expired runs."""
+    from agent.run_store import run_store
+    
     ttl_seconds = int(os.getenv("RUN_CLEANUP_TTL_SECONDS", 3600))
     interval_seconds = int(os.getenv("RUN_CLEANUP_INTERVAL_SECONDS", 60))
     while True:
@@ -279,70 +307,126 @@ async def startup():
 
 ## Algorithm Notes
 
-### SSE Stream Delivery (AC-3)
+### AC-3: SSE Stream Delivery
+
+**Request flow:**
 
 1. Receive `GET /agent/runs/{agent_run_id}/events`.
 2. Call `run_store.get(agent_run_id)`:
    - If `None`: raise `HTTPException(status_code=404, detail="Run not found")`.
-   - Else: proceed.
-3. Call `stream_events(agent_run_id)` to create async generator.
-4. Return `StreamingResponse(stream_events(...), media_type="text/event-stream", headers={...})`.
+   - Else: proceed to stream.
+3. Create `StreamingResponse` with `stream_events(agent_run_id)` generator.
+4. Return response with headers:
+   - `Content-Type: text/event-stream`
+   - `Cache-Control: no-cache`
+   - `Connection: keep-alive`
 
-### Event Generator (`stream_events()`)
+**Event generator (`stream_events()`):**
 
-1. Loop: `async for event_payload in run.events`:
-   - Extract `event_type` (string: "in_progress", "completed", "failed").
-   - Extract `data` (dict).
-   - Serialize `data` to JSON.
+1. Retrieve run from store; if missing, raise 404.
+2. Loop: `async for event_payload in run.events` (drains `asyncio.Queue`):
+   - Extract `event_type` from payload (string: "in_progress", "completed", "failed").
+   - Extract `data` dict from payload.
+   - Serialize data to JSON.
    - Yield SSE line format:
      ```
-     event: {event_type}\n
-     data: {json_data}\n
-     \n
+     event: {event_type}\ndata: {json_data}\n\n
      ```
    - If `event_type` in (`"completed"`, `"failed"`): break (close stream).
-2. If an exception occurs or queue is exhausted: close stream (no partial events).
+3. On queue exhaustion or exception: close stream.
 
-### Background Job Orchestration (AC-4, AC-5)
+**Multi-subscriber behavior:**
 
-1. **Spawn context (from Story 1):**
-   - `POST /agent/query` calls `asyncio.create_task(run_background_job(agent_run_id, query))`.
-   - Returns immediately to caller.
+- Each subscriber opens a new SSE connection and reads from `run.events` queue.
+- `run.events` is an `asyncio.Queue` shared across all subscribers for the same run.
+- All subscribers reading from the same queue see events in identical order (FIFO).
+- All subscribers see identical content; timing differences are only due to network I/O.
+- Late subscribers (connecting after background job completes) drain the queue and receive all previously enqueued events with no loss (full replay guarantee).
 
-2. **Background task execution:**
-   - Retrieves run from store.
-   - Calls `process_question(query)` (PER-20 orchestrator).
-   - On success: calculates hold time and enqueues `completed` event after hold.
-   - On error: enqueues `failed` event immediately (no hold).
-   - On exception: catches and enqueues `failed` event with error message.
+### AC-4: Five-Second Hold on Completed Events
 
-3. **5-Second Hold Calculation (AC-4):**
-   - `in_progress_sent_at` recorded by `run_store.create()` in Story 1.
-   - On answer ready: `elapsed = time.time() - in_progress_sent_at`.
-   - If `elapsed < 5.0`: `await asyncio.sleep(5.0 - elapsed)`.
-   - If `elapsed >= 5.0`: send immediately (no sleep).
-   - This enforces: `completed` event sent at time `max(ready_time, in_progress_time + 5.0)`.
+**Timeline for fast answer (< 5 sec):**
 
-4. **Failure Timing (AC-5):**
-   - No hold on `failed` events.
-   - Sent immediately when error is detected (before 5 seconds elapsed).
-   - Same behavior for LLM errors, MCP errors, and validation errors (from Story 1 rejection).
+```
+t=0.0:  in_progress event enqueued by run_store.create() [Story 1]
+        in_progress_sent_at = time.time() recorded
+t=0.1:  process_question() returns answer
+t=0.1:  elapsed = time.time() - in_progress_sent_at = 0.1s
+t=0.1:  hold_remaining = 5.0 - 0.1 = 4.9s
+t=0.1:  await asyncio.sleep(4.9) starts
+t=5.0:  sleep completes
+t=5.0:  completed event enqueued
+        SSE subscriber receives event at t ≈ 5.0s
+```
 
-### Cleanup Task (Run Expiration)
+**Timeline for slow answer (>= 5 sec):**
 
-1. **Startup (in `main.py`):**
-   - Background cleanup task created via `asyncio.create_task(cleanup_task())` on app startup.
-   - Runs every interval seconds (default 60).
+```
+t=0.0:  in_progress event enqueued; in_progress_sent_at = 0.0
+t=6.0:  process_question() returns answer
+t=6.0:  elapsed = 6.0s
+t=6.0:  hold_remaining = 5.0 - 6.0 = -1.0s (negative)
+t=6.0:  hold_remaining <= 0: skip sleep, send immediately
+t=6.0:  completed event enqueued
+        SSE subscriber receives event at t ≈ 6.0s (no extra hold)
+```
 
-2. **Cleanup logic (in `run_store.py`):**
-   - Iterates `_runs` dict.
-   - Deletes runs where `(now - created_at) > ttl_seconds`.
-   - Default TTL: 3600 seconds (1 hour).
+**Algorithm:**
 
-3. **Effect:**
-   - Runs deleted after TTL expiration (default 1 hour after creation).
-   - If SSE subscriber requests unknown run: returns HTTP 404.
-   - Configurable via `RUN_CLEANUP_TTL_SECONDS` and `RUN_CLEANUP_INTERVAL_SECONDS` env vars.
+1. Background task calls `process_question(query)`.
+2. If result contains `"answer"` key:
+   - Calculate `elapsed = time.time() - run.in_progress_sent_at`.
+   - Calculate `hold_remaining = 5.0 - elapsed`.
+   - If `hold_remaining > 0`: `await asyncio.sleep(hold_remaining)`.
+   - Enqueue `completed` event with answer.
+3. The hold is enforced per-run via `asyncio.sleep()` and does not block:
+   - Event stream reader (reads from queue; no blocking I/O).
+   - Other background jobs (each has its own asyncio task).
+   - POST /agent/query response (spawned asynchronously; no await).
+
+### AC-5: Failure Immediate (No Hold)
+
+**On error from `process_question`:**
+
+1. Result contains `"error"` key.
+2. No hold calculation; no `asyncio.sleep()`.
+3. Enqueue `failed` event immediately with error message.
+4. Elapsed time from error detection to enqueue: < 1 millisecond.
+
+**On exception in background task:**
+
+1. Exception caught by try/except in `run_background_job()`.
+2. No hold.
+3. Enqueue `failed` event with error message = `str(exception)`.
+4. Log (optional): stderr or application logger for debugging.
+
+**Event behavior:**
+
+- `failed` event sent immediately (no 5-second hold).
+- No `completed` event sent (either-or, never both).
+- Stream closes after `failed` (same as after `completed`).
+- SSE subscriber receives event typically < 1 second after failure detection.
+
+### Run Cleanup & TTL
+
+**Startup:**
+
+1. On app startup, `cleanup_task()` created via `asyncio.create_task()`.
+2. Cleanup task runs indefinitely in background.
+
+**Cleanup loop:**
+
+1. Sleep for `RUN_CLEANUP_INTERVAL_SECONDS` (default 60 seconds).
+2. Call `run_store.cleanup_expired(ttl_seconds=RUN_CLEANUP_TTL_SECONDS)`.
+3. Cleanup logic: delete all runs where `(now - created_at) > ttl_seconds`.
+
+**Effect:**
+
+- Runs deleted approximately `ttl_seconds` after creation (default 1 hour).
+- If SSE subscriber requests deleted run: `get()` returns `None`, handler raises 404.
+- Configurable via environment variables:
+  - `RUN_CLEANUP_TTL_SECONDS` (default 3600 = 1 hour)
+  - `RUN_CLEANUP_INTERVAL_SECONDS` (default 60 seconds)
 
 ---
 
@@ -352,14 +436,7 @@ async def startup():
 
 #### Test 1: AC-3 — GET /agent/runs/{known_id}/events returns HTTP 200 with text/event-stream
 
-```python
-async def test_get_agent_events_known_run_returns_200():
-    """Given a known run_id, GET /agent/runs/{id}/events returns HTTP 200 with text/event-stream."""
-    # Setup: POST /agent/query to create a run; capture agent_run_id
-    # When: GET /agent/runs/{agent_run_id}/events
-    # Then: response status 200, content-type "text/event-stream"
-```
-
+**Condition:** Known run_id  
 **Verification:**
 - Response status is 200.
 - Response header `Content-Type` is `text/event-stream`.
@@ -368,151 +445,84 @@ async def test_get_agent_events_known_run_returns_200():
 
 #### Test 2: AC-3 — First event is in_progress with correct run_id
 
-```python
-async def test_get_agent_events_first_event_in_progress():
-    """Given a known run_id, first SSE event is in_progress with correct run_id."""
-    # Setup: POST /agent/query with {"query": "What is …?"}; capture agent_run_id
-    # When: GET /agent/runs/{agent_run_id}/events, read first event
-    # Then: event type is "in_progress", data is {"run_id": "<agent_run_id>"}
-```
-
+**Condition:** SSE stream for known run  
 **Verification:**
 - First event line is `event: in_progress`.
 - First data line is `data: {"run_id": "<agent_run_id>"}` (exact match).
-- `run_id` in data matches POST response `agent_run_id`.
+- `run_id` value matches POST response `agent_run_id`.
 
 #### Test 3: AC-3 — All events include same run_id
 
-```python
-async def test_get_agent_events_all_events_same_run_id():
-    """Given a run, all SSE events include the same run_id."""
-    # Setup: POST /agent/query; capture agent_run_id
-    # When: GET /agent/runs/{agent_run_id}/events, read all events until stream closes
-    # Then: every event data contains "run_id": "<agent_run_id>" (unchanged across events)
-```
-
+**Condition:** Read all events from stream until closure  
 **Verification:**
-- Parse all events from stream.
-- Extract `run_id` from each event's data.
-- Confirm all `run_id` values match the POST response `agent_run_id`.
+- Parse all events.
+- Extract `run_id` from each event's data dict.
+- Confirm all values match POST response `agent_run_id` (no changes across events).
 
 #### Test 4: AC-3 — Unknown run_id returns HTTP 404
 
-```python
-async def test_get_agent_events_unknown_run_returns_404():
-    """Given an unknown run_id, GET /agent/runs/{id}/events returns HTTP 404."""
-    # When: GET /agent/runs/{unknown_uuid}/events
-    # Then: response status 404, body {"detail": "Run not found"}
-```
-
+**Condition:** GET with non-existent or expired run_id  
 **Verification:**
 - Response status is 404.
 - Response body contains `"detail": "Run not found"`.
 
-#### Test 5: AC-3 — Multiple concurrent subscribers receive identical events
+#### Test 5: AC-3 — Multiple concurrent subscribers receive identical events in same order
 
-```python
-async def test_get_agent_events_multiple_subscribers_same_order():
-    """Given a run, multiple concurrent SSE subscribers receive identical events in same order."""
-    # Setup: POST /agent/query; capture agent_run_id; mock process_question to delay 2s
-    # When: open two concurrent SSE streams for same agent_run_id
-    # Then: both streams receive in_progress, completed in same order; events are identical
-```
-
+**Condition:** Two SSE streams open simultaneously for same run_id  
 **Verification:**
-- Launch two concurrent `asyncio.Task` for same `agent_run_id`.
-- Collect events from both streams.
-- Confirm event order and content are identical.
+- Both streams open at same time (concurrent).
+- Both streams read events from shared `run.events` queue.
+- Event order is identical across both streams (first event is in_progress for both).
+- Event content is identical (same `run_id`, same message text).
+- No desync or ordering differences.
+- Verify events drained from queue are removed (FIFO consumption per queue semantics).
 
 #### Test 6: AC-4 — Fast answer (< 5s): hold until 5s, send completed at t ≥ 5s
 
-```python
-async def test_get_agent_events_fast_answer_5s_hold():
-    """Given an answer ready < 5s after in_progress, stream held until 5s, then completed sent."""
-    # Setup: POST /agent/query; mock process_question to return answer in 0.1s
-    # When: GET /agent/runs/{agent_run_id}/events
-    # Then: in_progress sent at t=0, completed sent at t ≥ 5.0 (held for ~4.9s)
-```
-
+**Condition:** Answer ready < 5s after in_progress  
 **Verification:**
 - Record timestamp of `in_progress` event receipt (`t_in_progress`).
 - Record timestamp of `completed` event receipt (`t_completed`).
 - Assert `(t_completed - t_in_progress) >= 4.9` (allow 100ms jitter).
-- Assert `completed` event data contains answer.
+- Assert `completed` event data contains `response.answer` field.
 
-#### Test 7: AC-4 — Slow answer (≥ 5s): send completed immediately when ready (no extra hold)
+#### Test 7: AC-4 — Slow answer (≥ 5s): send completed immediately (no extra hold)
 
-```python
-async def test_get_agent_events_slow_answer_no_extra_hold():
-    """Given an answer ready ≥ 5s after in_progress, completed sent immediately when ready."""
-    # Setup: POST /agent/query; mock process_question to return answer in 6s
-    # When: GET /agent/runs/{agent_run_id}/events
-    # Then: in_progress sent at t=0, completed sent at t ≈ 6.0 (no extra hold)
-```
-
+**Condition:** Answer ready ≥ 5s after in_progress  
 **Verification:**
-- Record timestamp of `in_progress` event receipt (`t_in_progress`).
-- Record timestamp of `completed` event receipt (`t_completed`).
+- Record timestamps `t_in_progress` and `t_completed`.
 - Assert `(t_completed - t_in_progress) >= 5.9` and `<= 6.1` (tight range, no extra hold).
 
 #### Test 8: AC-4 — Edge case: answer ready exactly at 5s
 
-```python
-async def test_get_agent_events_answer_at_5s_exact():
-    """Given an answer ready exactly at 5s after in_progress, completed sent immediately."""
-    # Setup: POST /agent/query; mock process_question to return answer in exactly 5.0s
-    # When: GET /agent/runs/{agent_run_id}/events
-    # Then: in_progress at t=0, completed at t ≈ 5.0 (no extra hold)
-```
-
+**Condition:** Answer ready exactly at 5.0s after in_progress  
 **Verification:**
 - Record timestamps.
-- Assert `(t_completed - t_in_progress) >= 4.95` and `<= 5.05` (tight tolerance at boundary).
+- Assert `(t_completed - t_in_progress) >= 4.95` and `<= 5.05` (tight tolerance).
 
 #### Test 9: AC-5 — LLM error: in_progress, then failed immediately (no hold, no completed)
 
-```python
-async def test_get_agent_events_llm_error_immediate_failed():
-    """Given LLM error, stream sends in_progress, then failed immediately (no 5s hold)."""
-    # Setup: POST /agent/query; mock process_question to return {"error": "LLM timeout"}
-    # When: GET /agent/runs/{agent_run_id}/events
-    # Then: in_progress sent at t=0, failed sent at t < 1.0 (immediately, no 5s hold)
-    # And: no completed event sent
-```
-
+**Condition:** `process_question` returns `{"error": "LLM timeout"}`  
 **Verification:**
-- Parse events: first is `in_progress`, second is `failed`.
+- First event is `in_progress`.
+- Second event is `failed`.
 - No `completed` event present.
-- Time from `in_progress` to `failed` is < 1.0 second.
+- Elapsed time from `in_progress` to `failed` is < 1.0 second.
 - `failed` event data contains `"error": "LLM timeout"`.
 
 #### Test 10: AC-5 — MCP error: in_progress, then failed immediately (no hold, no completed)
 
-```python
-async def test_get_agent_events_mcp_error_immediate_failed():
-    """Given MCP error, stream sends in_progress, then failed immediately."""
-    # Setup: POST /agent/query; mock process_question to raise exception (MCP call fails)
-    # When: GET /agent/runs/{agent_run_id}/events
-    # Then: in_progress sent at t=0, failed sent at t < 1.0, no completed
-```
-
+**Condition:** MCP call raises exception  
 **Verification:**
-- Parse events: `in_progress`, then `failed`.
+- First event is `in_progress`.
+- Second event is `failed`.
 - No `completed` event.
 - Elapsed time < 1.0 second.
 - `failed` event data contains error message (exception string).
 
 #### Test 11: AC-5 — Invalid query rejection: SSE stream sends failed immediately (no completed)
 
-```python
-async def test_get_agent_events_invalid_query_failed_no_wait():
-    """Given rejected query from POST, SSE sends in_progress then failed immediately."""
-    # Setup: POST /agent/query with {"query": ""}; capture agent_run_id
-    # When: GET /agent/runs/{agent_run_id}/events
-    # Then: first event is in_progress, second event is failed (from AC-2 rejection path)
-    # And: no completed event sent, error is "invalid query"
-```
-
+**Condition:** Query rejected in POST /agent/query [AC-2]  
 **Verification:**
 - First event is `in_progress`.
 - Second event is `failed`.
@@ -521,65 +531,39 @@ async def test_get_agent_events_invalid_query_failed_no_wait():
 
 #### Test 12: AC-4 — Stream closes after completed event
 
-```python
-async def test_get_agent_events_stream_closes_after_completed():
-    """Given completed event sent, stream closes and does not send further events."""
-    # Setup: POST /agent/query with valid query
-    # When: GET /agent/runs/{agent_run_id}/events, read until stream closes
-    # Then: last event is completed, stream is closed, no additional events
-```
-
+**Condition:** SSE stream reads until closure  
 **Verification:**
 - Read events until stream closes (no more data).
 - Last event received is `completed`.
-- Count of events is exactly 2 (in_progress, completed).
+- Event count is exactly 2 (in_progress, completed).
 
 #### Test 13: AC-5 — Stream closes after failed event
 
-```python
-async def test_get_agent_events_stream_closes_after_failed():
-    """Given failed event sent, stream closes and does not send further events."""
-    # Setup: POST /agent/query; mock process_question to return error
-    # When: GET /agent/runs/{agent_run_id}/events, read until stream closes
-    # Then: last event is failed, stream is closed, no additional events
-```
-
+**Condition:** SSE stream reads until closure  
 **Verification:**
 - Read events until stream closes.
 - Last event received is `failed`.
-- Count of events is exactly 2 (in_progress, failed).
+- Event count is exactly 2 (in_progress, failed).
 
 #### Test 14: AC-3 — Subscriber disconnect does not cancel background job
 
-```python
-async def test_get_agent_events_disconnect_does_not_cancel_job():
-    """Given a subscriber disconnects mid-stream, background job continues and completes."""
-    # Setup: POST /agent/query; mock process_question to delay 2s; open SSE stream
-    # When: close SSE stream after receiving in_progress (disconnect subscriber)
-    # Then: background job continues and completes in background
-    # And: a new subscriber opening same run_id can retrieve completed event
-```
-
+**Condition:** Subscriber closes connection while background job running  
 **Verification:**
-- Open SSE stream, read first event, close connection.
+- Open SSE stream, read first event (`in_progress`), close connection immediately.
 - Wait 3 seconds (allow background job to complete).
 - Open new SSE stream for same run_id.
-- New subscriber can retrieve in_progress and completed events (replay from queue).
+- New subscriber receives all queued events (`in_progress`, then `completed` or `failed`).
+- No events lost; background job continued despite subscriber disconnect.
 
 #### Test 15: AC-3 — Late subscriber retrieves all events (no replay loss)
 
-```python
-async def test_get_agent_events_late_subscriber_gets_all_events():
-    """Given background job completes before subscriber connects, new subscriber gets all events."""
-    # Setup: POST /agent/query; mock process_question to return answer in 0.5s
-    # When: wait 1 second (allow job to complete), then open SSE stream
-    # Then: subscriber receives in_progress, then completed (no events lost)
-```
-
+**Condition:** Background job completes before subscriber connects  
 **Verification:**
-- Verify events are queued in `run.events` before any subscriber connects.
-- New subscriber drains queue and receives full event history.
-- No events are dropped.
+- Submit POST /agent/query with valid query.
+- Wait for background job to complete (receive `completed` or `failed` event timing + 1 second).
+- Open SSE stream with GET /agent/runs/{agent_run_id}/events.
+- Verify stream delivers all previously queued events in order (`in_progress`, `completed` or `failed`).
+- No events dropped or lost; queue replay is complete.
 
 ---
 
@@ -587,9 +571,9 @@ async def test_get_agent_events_late_subscriber_gets_all_events():
 
 | AC | Test # | Condition | Pass Criteria |
 |----|--------|-----------|---------------|
-| AC-3 | 1, 2, 3, 4, 5, 14, 15 | Stream setup, event delivery, run lookup, multi-subscriber | HTTP 200, `text/event-stream`, first event `in_progress`, all events same `run_id`, 404 on unknown, subscribers independent, events not lost |
-| AC-4 | 6, 7, 8, 12 | 5-second hold for `completed` only | Fast answer held until 5s, slow answer immediate, edge case at 5s, stream closes after `completed` |
-| AC-5 | 9, 10, 11, 13 | `failed` immediate, no hold, no `completed` | LLM error, MCP error, invalid query, all send `failed` immediately; no `completed` event sent; stream closes after `failed` |
+| AC-3 | 1, 2, 3, 4, 5, 14, 15 | Stream setup, event delivery, run lookup, multi-subscriber | HTTP 200 with text/event-stream headers; first event in_progress with correct run_id; all events same run_id; 404 on unknown; multi-subscriber sync; no event loss on disconnect or late subscribe |
+| AC-4 | 6, 7, 8, 12 | 5-second hold timing for completed | Fast answer held to ≥ 4.9s; slow answer immediate (no extra hold); edge case at 5s handled correctly; stream closes after completed |
+| AC-5 | 9, 10, 11, 13 | Failure immediate, no hold, no completed | LLM error, MCP error, invalid query all send failed immediately (< 1s); no completed event sent; stream closes after failed |
 
 **Total Test Count: 15**
 
@@ -597,14 +581,15 @@ async def test_get_agent_events_late_subscriber_gets_all_events():
 
 ## Notes
 
-- **Event Queue (Run.events):** `asyncio.Queue` per run; events enqueued synchronously by background task before subscribers open; replay available to late subscribers.
-- **5-Second Hold:** Enforced in background task via `asyncio.sleep()`; does not block event stream reader or other jobs.
-- **Timestamp Recording:** `in_progress_sent_at` recorded by Story 1 `run_store.create()`; used by background task for hold calculation.
-- **Cleanup Policy:** Default 1-hour TTL; configurable via `RUN_CLEANUP_TTL_SECONDS` and `RUN_CLEANUP_INTERVAL_SECONDS` env vars.
-- **Event Format:** SSE spec: `event: <type>\ndata: <json>\n\n` (two newlines after data).
-- **Exception Handling:** Any unhandled exception in background task caught and converted to `failed` event with error message as string.
-- **PER-20 Dependency:** `process_question(query: str) → dict` signature is stable (AC-6). Expected return: `{"answer": "<text>"}` or `{"error": "<message>"}`.
-- **Process Isolation:** MCP calls remain in main agent process; no child processes forked by background task or SSE stream.
-- **Backward Compatibility:** Story 2 does not modify POST /query or GET /health; see Story 3 (03-agent) for audit.
-- **Routes Location:** Per `change_requests.md`, all routes (POST /agent/query, GET /agent/runs/{id}/events, existing POST /query and GET /health) are registered in `agent/src/main.py`. No separate routes module.
+- **Event Queue (Run.events):** `asyncio.Queue` per run (in-memory, single-process). Events enqueued synchronously by background task before subscribers open; replay available to late subscribers. Queue is FIFO; all subscribers reading from same queue see events in identical order.
+- **5-Second Hold:** Enforced in background task via `asyncio.sleep()` (non-blocking per-run); does not block event stream reader, other jobs, or POST response.
+- **Timestamp Recording:** `in_progress_sent_at` recorded by Story 1 `run_store.create()` at UTC/epoch time; used by background task for hold calculation (Algorithm: `elapsed = now - in_progress_sent_at`; `hold_remaining = 5.0 - elapsed`).
+- **Cleanup Policy:** Default 1-hour TTL; configurable via `RUN_CLEANUP_TTL_SECONDS` and `RUN_CLEANUP_INTERVAL_SECONDS` environment variables. Cleanup condition: `(now - created_at) > ttl_seconds` (strict inequality; run at exactly ttl_seconds is not deleted).
+- **Event Format:** SSE spec compliant: `event: <type>\ndata: <json>\n\n` (two newlines after data).
+- **Exception Handling:** Any unhandled exception in background task caught by try/except; converted to `failed` event with `error: str(exception)`.
+- **PER-20 Dependency:** `process_question(query: str) → dict` signature is stable (AC-6). Expected return: `{"answer": "<text>"}` (string value) or `{"error": "<message>"}` (string value). Return type must be `dict`; data values must be JSON-serializable strings.
+- **Process Isolation:** MCP calls remain in main agent process; no child processes forked by background task or SSE stream (only `asyncio.create_task()` used; no `Thread()`, `Process()`, or `ThreadPoolExecutor`).
+- **Backward Compatibility:** Story 2 does not modify POST /query or GET /health; Story 3 verifies no regression.
+- **Routes Location:** Per `change_requests.md`, all routes (POST /agent/query, GET /agent/runs/{id}/events, existing POST /query, GET /health) in `agent/main.py` only. No separate routes module.
+- **Global Run Store:** `run_store` is a singleton initialized in Story 1 `main.py` and imported by `background_task.py` and `sse_handler.py`. No per-call passing required; all modules share the same instance.
 ```

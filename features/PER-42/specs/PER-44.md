@@ -1,4 +1,3 @@
-```markdown
 # Tech Stub: PER-44 — Stream PER-20 answer via SSE with in_progress, completed, or failed events
 
 **Ticket ID:** PER-44  
@@ -110,9 +109,8 @@ All paths resolve from the `agent` repository root.
 
 ```
 agent/
-├── src/agent/
-│   ├── sse_handler.py
-│   └── background_task.py
+├── sse_handler.py
+├── background_task.py
 └── tests/
     └── test_agent_sse_stream.py
 ```
@@ -121,16 +119,16 @@ agent/
 
 ```
 agent/
-├── src/agent/models.py (add SSE event data models)
-├── src/agent/run_store.py (extend with cleanup method and per-run event queue management)
-└── src/main.py (add GET /agent/runs/{agent_run_id}/events route; add cleanup task startup)
+├── models.py (add SSE event data models)
+├── run_store.py (extend with cleanup method and per-run event queue management)
+└── main.py (add GET /agent/runs/{agent_run_id}/events route; add cleanup task startup)
 ```
 
 ---
 
 ## Models & Interfaces
 
-### Pydantic Event Data Models (`agent/src/agent/models.py` — extend)
+### Pydantic Event Data Models (`agent/models.py` — extend)
 
 ```python
 from typing import Literal
@@ -151,7 +149,7 @@ class FailedEventData(BaseModel):
     error: str
 ```
 
-### Run Store Interface — Extensions (`agent/src/agent/run_store.py`)
+### Run Store Interface — Extensions (`agent/run_store.py`)
 
 ```python
 from dataclasses import dataclass
@@ -202,7 +200,7 @@ class RunStore:
             del self._runs[run_id]
 ```
 
-### SSE Handler Interface (`agent/src/agent/sse_handler.py`)
+### SSE Handler Interface (`agent/sse_handler.py`)
 
 ```python
 from typing import AsyncGenerator
@@ -238,7 +236,7 @@ async def stream_events(run_id: str) -> AsyncGenerator[str, None]:
             break  # Close stream after final event
 ```
 
-### Background Task Interface (`agent/src/agent/background_task.py`)
+### Background Task Interface (`agent/background_task.py`)
 
 ```python
 import asyncio
@@ -304,7 +302,7 @@ async def run_background_job(agent_run_id: str, query: str) -> None:
         run.ended_at = time.time()
 ```
 
-### Route Handler — Extension (`agent/src/main.py`)
+### Route Handler — Extension (`agent/main.py`)
 
 ```python
 from fastapi import FastAPI, HTTPException
@@ -435,7 +433,7 @@ Tests are listed in `stories/02-agent.md`.
 ## Dependencies & Constraints
 
 - **On PER-20:** Depends on stable `process_question(query: str) → dict` signature returning `{"answer": "…"}` or `{"error": "…"}`.
-- **On PER-43:** Depends on `run_store.create()`, `run_store.get()`, and background task spawn via `asyncio.create_task()` in `agent/src/main.py`.
+- **On PER-43:** Depends on `run_store.create()`, `run_store.get()`, and background task spawn via `asyncio.create_task()` in `agent/main.py`.
 - **On existing FastAPI app:** Registers GET route in same app instance as POST /query (AC-6); no interference with existing endpoints.
 
 ---
@@ -455,7 +453,7 @@ Tests are listed in `stories/02-agent.md`.
 - **Exception Handling:** Any unhandled exception in background task caught and converted to `failed` event with exception message as string.
 - **Backward Compatibility:** This ticket does not modify POST /query or GET /health; see PER-45 for verification and audit.
 - **Timestamp Precision:** `in_progress_sent_at` recorded by PER-43; used for hold calculation. Millisecond precision sufficient for 5-second hold.
-- **Routes Location:** Per `change_requests.md`, all routes (POST /agent/query, GET /agent/runs/{id}/events, existing POST /query and GET /health) are registered in `agent/src/main.py` only. No separate routes module.
+- **Routes Location:** Per `change_requests.md`, all routes (POST /agent/query, GET /agent/runs/{id}/events, existing POST /query and GET /health) are registered in `agent/main.py` only. No separate routes module.
 
 ---
 
@@ -466,4 +464,3 @@ Tests are listed in `stories/02-agent.md`.
 3. **5-second hold configurable?** → Yes; default to 5 seconds, expose as env var `AGENT_COMPLETE_HOLD_SECONDS` in config or `.env`.
 4. **Cleanup interval:** How often to delete expired runs? → Every 60 seconds (tunable); configurable via `RUN_CLEANUP_INTERVAL_SECONDS`.
 5. **Subscription limit per run:** Should we cap concurrent SSE subscribers? → No limit for PoC; add if resource contention surfaces.
-```
