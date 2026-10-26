@@ -1,0 +1,125 @@
+Story **03-agent** is done. FastMCP HTTP tool calls replace the stub; all **11** tests pass.
+
+### What changed
+| Action | File |
+|--------|------|
+| **Added** | `agent/mcp_client.py` — JSON-RPC `tools/call` over `httpx`, ID normalize (`emp-001`→`EMP-001`), unreachable/timeout/tool errors, no stdio |
+| **Modified** | `agent/orchestrator.py` — uses `mcp_client.call_tool` |
+| **Removed** | `agent/mcp_stub.py` |
+| **Added** | `tests/test_tool_call.py`, `test_id_normalization.py`, `test_mcp_unreachable.py`, `test_tool_error.py`, `test_health_mcp_up.py` |
+| **Modified** | `tests/test_query_tool_stub.py` — patches `mcp_client` |
+
+### Unchanged (already correct)
+- `agent/health.py` — already HEAD-probes `MCP_URL` via `httpx.AsyncClient`
+- `requirements.txt` — already lists `httpx`
+- No `flask_app.py` / `stdio_mcp.py` present
+
+### Tests
+```
+11 passed
+```
+The four forge comments on story 03-agent are already implemented in this branch. The working tree is clean, so no further edits were required.
+
+**AC-2 tool inference.** `_infer_tool` matches `get employee <id>` and `get sales order <id>` before the list heuristics, and puts the id in `tool_args`. `get employee emp-001` routes to `get_employee_by_id`, not `list_employees`.
+
+**AC-2 FastMCP transport.** `call_tool` opens the SSE stream with `Accept: text/event-stream`, reads the session endpoint, then sends `initialize`, `notifications/initialized`, and `tools/call`. A JSON-RPC POST straight to the SSE URL is not used. `tests/fastmcp_fake.py` rejects that shortcut and checks the real session sequence.
+
+**AC-2 tool coverage.** Tests exercise all four tools. Get-by-id calls normalize `emp-001` to `EMP-001` and `so-123` to `SO-123` before the SSE call.
+
+**AC-4 health probe.** `_probe_mcp` uses GET with `Accept: text/event-stream` and treats any status below 500 as reachable. It does not send HEAD.
+
+Files that carry these fixes:
+
+- `agent/llm_client.py`
+- `agent/mcp_client.py`
+- `agent/health.py`
+- `tests/fastmcp_fake.py`
+- `tests/test_infer_tool.py`
+- `tests/test_tool_inference.py`
+- `tests/test_tool_call.py`
+- `tests/test_id_normalization.py`
+- `tests/test_tool_error.py`
+- `tests/test_mcp_unreachable.py`
+- `tests/test_health_mcp_up.py`
+- `tests/test_query_tool_stub.py`
+
+`pytest tests/` — 35 passed. These commits are local only (`feat/PER-20` is 4 commits ahead of `origin/feat/PER-20`).
+The agent now calls all four MCP tools over FastMCP’s SSE client, and the review gaps are covered by tests that talk to a real SSE session.
+
+- **Tool routing.** Questions like `get employee emp-001` and `get sales order so-123` select `get_employee_by_id` and `get_sales_order_by_id` and keep the id. List questions still use `list_employees` and `list_sales_order`.
+- **Transport.** `call_tool` uses the `mcp` SSE client (`sse_client` and `ClientSession`): open the event stream, initialize, then call the tool. Ids are normalized before the call (`emp-001` → `EMP-001`, `so-123` → `SO-123`). A down server returns `MCP server unreachable` and does not start a stdio process.
+- **Health.** `/health` probes `MCP_URL` with GET and `Accept: text/event-stream`, so a live FastMCP endpoint is not marked unreachable.
+- **Tests.** The in-process FastMCP peer rejects a JSON-RPC POST to the SSE URL. Coverage includes all four tools, both id normalizations, tool errors, an unreachable server, and the health probe.
+
+36 tests passed.
+
+Files changed: `agent/mcp_client.py`, `tests/fastmcp_fake.py`, `requirements.txt` (`mcp>=1.9,<2`).
+AC-2 now checks the real FastMCP SSE handshake. A bare JSON-RPC POST to the SSE URL is rejected, and tool calls go through `mcp.client.sse.sse_client`.
+
+`tests/test_tool_call.py` drives the official SSE client against an in-process FastMCP peer. Each tool call must open `GET /sse` with `Accept: text/event-stream`, then `initialize` and `tools/call` on the session URL. The decoded tool result is `{"result": "ok"}`. A direct JSON-RPC POST to the SSE URL returns 405.
+
+`tests/fastmcp_fake.py` records HTTP order and fails the assertion if a client posts JSON-RPC to the SSE URL before the event stream is open.
+
+The client in `agent/mcp_client.py` already uses that SSE client for `list_sales_order`, `list_employees`, `get_sales_order_by_id`, and `get_employee_by_id`.
+
+All 37 tests in `tests/` passed.
+Tool failures now come back as a clear error. When a FastMCP tool returns `{"error": "..."}`, the agent returns that error directly and does not ask the LLM to turn it into an apology.
+
+`call_tool` lifts three failure shapes into `{"error": message}`: an MCP protocol error, a result with `isError`, and a normal tool body whose payload is `{"error": "..."}` (`isError` stays false). The orchestrator already returns `tool_result["error"]` in that case and skips synthesis. Unreachable MCP still returns `{"error": "MCP server unreachable"}`.
+
+Files changed:
+
+- `agent/mcp_client.py`
+- `agent/orchestrator.py`
+- `tests/test_tool_error.py`
+
+`pytest tests/` — 38 passed.
+The original stdio orchestrator uppercases every string `id` with `value.upper()` and no format check. `_normalize_id()` follows that rule, so hyphenated and unhyphenated ids are both accepted.
+
+| Input | Sent to the tool |
+|---|---|
+| `emp-001`, `Emp-001`, `eMp-001`, `EMP-001` | `EMP-001` |
+| `emp001`, `Emp001`, `EMP001` | `EMP001` |
+| `so-123`, `SO-123` | `SO-123` |
+| `so123` | `SO123` |
+| `ord-001`, `Ord-001` | `ORD-001` |
+| `foo-bar-123` | `FOO-BAR-123` |
+| `emp_001` | `EMP_001` |
+
+Other argument keys stay as they are. A non-string `id` is left unchanged.
+
+The README setup section lists these examples. Hub `requirements.md` was left unchanged because this is the existing normalization behavior, not a hyphen-only format.
+
+**Files changed**
+- `agent/mcp_client.py`
+- `tests/test_id_normalization.py`
+- `README.md`
+
+**Tests:** 42 passed (`test_tool_call`, `test_id_normalization`, `test_mcp_unreachable`, `test_tool_error`, `test_health_mcp_up`, `test_readme_setup`, `test_infer_tool`).
+AC-2 entity-by-ID routing is already in place, and the full suite passes (68 tests).
+
+`agent/llm_client.py` keeps `get_employee_by_id` and `get_sales_order_by_id` from collapsing into a list call. `_GET_BY_ID_HANDLERS` reads the id out of the question (`emp-001`, `emp001`, `Emp-001`, `so-123`, `so123`, `ord-001`, and “with id …” forms). If the model picks a list tool, drops `id`, or answers in prose, `_apply_get_by_id` still sends that tool with the raw id. `agent/mcp_client.py` uppercases the id before the FastMCP call (`emp-001` → `EMP-001`).
+
+`tests/test_tool_inference.py` covers the cases where the model misses the tool or the id.
+
+No further edits. The working tree is clean; those changes are in the two local commits ahead of `origin/feat/PER-20`.
+The AC-2 tool-call test now checks the real FastMCP SSE session, so a mocked `httpx.post` can no longer pass it.
+
+`tests/test_tool_call.py` starts the `mcp` library's FastMCP SSE server and leaves `sse_client` and `httpx` unpatched. A passing call has to:
+
+- open `GET /sse` with `Accept: text/event-stream` and get a `text/event-stream` response
+- read the SSE `endpoint` event and POST `initialize`, `notifications/initialized`, and `tools/call` to `/messages/?session_id=...`
+- invoke each of the four tools, with `emp-001` and `so-123` sent as `EMP-001` and `SO-123`
+
+A JSON-RPC POST straight to the SSE URL is asserted separately: the server rejects it and no tool runs. `agent/mcp_client.py` already uses `mcp.client.sse.sse_client`, so that file did not change.
+
+The full suite passed: 69 tests.
+Historical ID handling is preserved: every string `id` is uppercased, including unhyphenated forms such as `emp001` → `EMP001`.
+
+The original stdio orchestrator (`app/agent/orchestrator.py` in the PER-7 agent) used `value.upper() if key == "id"` with no format check. A hyphen-only pattern would have left `emp001` unchanged. `_normalize_id` already follows that rule, and the docstring now records the source and the formats it covers: hyphenated, unhyphenated, multi-part (`Foo-Bar-123` → `FOO-BAR-123`), and underscore (`emp_001` → `EMP_001`). Separators stay as they are. Non-string `id` values are left unchanged.
+
+**Files changed**
+- `agent/mcp_client.py` — documented that historical scope in `_normalize_id`
+- `tests/test_id_normalization.py` — locked those formats on the FastMCP tool call, including unhyphenated and multi-part ids
+
+92 tests passed.

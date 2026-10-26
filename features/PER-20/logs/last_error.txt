@@ -1,0 +1,15 @@
+open_pr: gh pr create -R goofranshaikh-eng/adlc-graphql --base main --head feat/PER-20 --title PER-20: graphql --body Feature `PER-20` — repo `graphql`
+
+Merge order: graphql → mcp → agent
+Sibling repos: graphql, mcp, agent
+
+## Pre-PR QA
+# Pre-PR QA
+
+- stories present: yes
+- specs locked: True
+
+
+Agent code review runs on this PR. Hub/spec PRs are human-only.
+ failed: Warning: 26 uncommitted changes
+pull request create failed: GraphQL: Head sha can't be blank, Base sha can't be blank, No commits between main and feat/PER-20, Head ref must be a branch (createPullRequest)

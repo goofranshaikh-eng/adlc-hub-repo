@@ -1,0 +1,48 @@
+Story 01-fastapi is implemented as schema and configuration only. `python -m pytest -q` passed (12 tests), and `python -m compileall -q app tests` succeeded.
+
+The service now has Pydantic models for the query request and the immediate reply (`ok` or `rejected`, plus `run_id`), dataclass SSE events for `in_progress`, `completed`, and `failed`, and agent settings read from the environment. `AGENT_BASE_URL` defaults to `http://localhost:8001` and `AGENT_TIMEOUT` defaults to `3`. `run_id` stays a required string; UUID4 checks are left to the caller that generates it.
+
+Files changed:
+
+- `app/__init__.py`
+- `app/config.py`
+- `app/models/__init__.py`
+- `app/models/query_models.py`
+- `app/models/sse_events.py`
+- `tests/test_query_request.py`
+- `tests/test_immediate_response.py`
+- `tests/test_sse_events.py`
+- `tests/test_config.py`
+- `pyproject.toml`
+Story 01-fastapi is already implemented as schemas and configuration only. `python3 -m pytest -q` passed (12 tests), and `python3 -m compileall -q app tests` succeeded.
+
+The service now has Pydantic models for the query request and the immediate reply (`ok` or `rejected`, plus `run_id`), dataclass SSE events for `in_progress`, `completed`, and `failed`, and agent settings read from the environment. `AGENT_BASE_URL` defaults to `http://localhost:8001` and `AGENT_TIMEOUT` defaults to `3`. `run_id` stays a required string; UUID4 checks are left to the caller that generates it.
+
+Files changed:
+
+- `app/__init__.py`
+- `app/config.py`
+- `app/models/__init__.py`
+- `app/models/query_models.py`
+- `app/models/sse_events.py`
+- `tests/test_query_request.py`
+- `tests/test_immediate_response.py`
+- `tests/test_sse_events.py`
+- `tests/test_config.py`
+- `pyproject.toml`
+Story 01-fastapi is already implemented as schemas and configuration only. `python3 -m pytest -q` passed (12 tests), and `.venv/bin/python -m compileall -q app` now succeeds.
+
+The service has Pydantic models for the query request and the immediate reply (`ok` or `rejected`, plus `run_id`), dataclass SSE events for `in_progress`, `completed`, and `failed`, and agent settings read from the environment. `AGENT_BASE_URL` defaults to `http://localhost:8001` and `AGENT_TIMEOUT` defaults to `3`. `run_id` stays a required string; UUID4 checks are left to the caller that generates it.
+
+Files:
+
+- `app/__init__.py`
+- `app/config.py`
+- `app/models/__init__.py`
+- `app/models/query_models.py`
+- `app/models/sse_events.py`
+- `tests/test_query_request.py`
+- `tests/test_immediate_response.py`
+- `tests/test_sse_events.py`
+- `tests/test_config.py`
+- `pyproject.toml`

@@ -1,0 +1,14 @@
+`AgentClient` is a pass-through to the agent service. It submits one query and opens one SSE subscription, and it forwards the agent's reply and events as received.
+
+`initiate_query()` POSTs to `{AGENT_BASE_URL}/agent/query` and returns the agent's JSON (`ok` or `rejected`). The timeout is Story 1's `AGENT_TIMEOUT` (default 3 seconds). A timeout, a connection failure, or an HTTP 4xx/5xx raises `AgentTimeoutError`, `AgentConnectionError`, or `AgentHTTPError` so the caller can map them to 503. There are no retries.
+
+`subscribe_to_run()` opens one GET to `{AGENT_BASE_URL}/agent/runs/{agent_run_id}/events` with `Accept: text/event-stream`, yields each parsed event, and closes the connection after `completed` or `failed`. The stream timeout is 300 seconds. The client does not generate status events or import MCP.
+
+22 tests passed.
+
+Files changed:
+
+- `app/services/__init__.py`
+- `app/services/agent_client.py`
+- `tests/test_agent_client.py`
+- `pyproject.toml` (`httpx` dependency)

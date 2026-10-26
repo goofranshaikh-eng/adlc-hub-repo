@@ -1,0 +1,16 @@
+The four FastMCP tools are registered on the shared server and covered by Tests 8–13. All 14 tests passed.
+
+**Tools** (`tools.py`), exposed on `/sse` through `server.py`:
+
+- `list_sales_order` returns `{"salesOrders": [...]}`
+- `list_employees` returns `{"employees": [...]}` (each record includes a `name`)
+- `get_sales_order_by_id` returns `{"salesOrder": {...}}`
+- `get_employee_by_id` returns `{"employee": {...}}`
+
+Queries use the TriNet fields `salesorder_list`, `employee_list`, `get_salesorder_by_id`, and `get_employee_by_id`. A missing or blank `id` returns `{"error": "Missing required parameter: id"}` without calling GraphQL. If the client raises, the tool returns `{"error": "..."}` and the process stays up.
+
+**Files changed**
+
+- `tools.py` (new)
+- `tests/test_tools.py` (new)
+- `server.py` (registers the tools before the SSE app is created)

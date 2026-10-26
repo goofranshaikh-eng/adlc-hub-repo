@@ -1,0 +1,44 @@
+Story **01-mcp** is implemented. All **16 unit tests passed**; integration tests **skip** without `GRAPHQL_ENDPOINT` (no local GraphQL service).
+
+### Files changed
+
+**Source**
+- `mcp/__init__.py`
+- `mcp/graphql_client.py` — HTTP GraphQL client + `NetworkError`
+- `mcp/tools/list_sales_order.py`
+- `mcp/tools/list_employees.py`
+- `mcp/tools/get_sales_order_by_id.py`
+- `mcp/tools/get_employee_by_id.py`
+- `mcp/tools/__init__.py`
+- `mcp/server.py` — registers the four MCP tools (stdio)
+
+**Tests**
+- `tests/test_graphql_client.py` (4)
+- `tests/tools/test_list_sales_order.py` (2)
+- `tests/tools/test_list_employees.py` (2)
+- `tests/tools/test_get_sales_order_by_id.py` (4)
+- `tests/tools/test_get_employee_by_id.py` (4)
+- `tests/test_mcp_server.py` (2 integration)
+- `tests/__init__.py`, `tests/tools/__init__.py`
+
+**Docs / deps**
+- `README.md` — setup, env vars, usage, test commands
+- `requirements.txt` — `requests`, `mcp>=1.0,<2`, `pytest`
+
+### Run
+```bash
+source .venv/bin/activate
+pytest tests/ -k "not integration"          # 16 passed
+export GRAPHQL_ENDPOINT=http://localhost:4000/graphql
+pytest tests/test_mcp_server.py             # needs PER-5 GraphQL
+python -m mcp.server
+```
+The three forge review comments on story 01-mcp are fixed. `pytest` reports 17 passed and 2 skipped (the integration tests skip when `GRAPHQL_ENDPOINT` is unset).
+
+**Initialization options.** `mcp/server.py` no longer asserts on `init_options`. `server.create_initialization_options()` still builds the `InitializationOptions` (server name and version), and that object is passed to `server.run()`.
+
+**HTTP error text.** `mcp/graphql_client.py` now returns `HTTP error 500` with no colon after "error", so tool handlers produce `{"error": "Failed to fetch sales orders: HTTP error 500"}`.
+
+**Malformed JSON shape.** `tests/test_graphql_client.py` adds `test_execute_query_non_dict_json`, which checks that a JSON array raises `ValueError("malformed JSON response: expected object")`. The HTTP 500 test expects the colon-free message.
+
+Files changed: `mcp/server.py`, `mcp/graphql_client.py`, `tests/test_graphql_client.py`.

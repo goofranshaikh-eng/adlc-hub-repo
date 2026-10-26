@@ -1,0 +1,24 @@
+`GET /query/{run_id}/stream` now forwards the agent's SSE events and drops the run mapping when the stream ends. FastAPI does not create run status, add a delay, or poll.
+
+- A known `run_id` returns `200` with `text/event-stream`. Events are forwarded as the agent sent them, and the stream stops after `completed` or `failed`.
+- An unknown `run_id` returns `404` with `Run not found`, and the agent is not called.
+- A subscription timeout becomes a `failed` event with `Agent timeout`. Any other subscription error becomes `failed` with `Stream error`. Details stay in the server log.
+- The registry entry is removed in a `finally` block, including when the client disconnects.
+
+Tests: `48 passed`.
+
+Files changed:
+- `app/routers/query.py`
+- `app/streaming.py`
+- `app/main.py`
+- `tests/test_stream_endpoint.py`
+The SSE stream now treats a mid-stream agent drop as a backend error, and the suite checks that the stream stops after the first terminal event.
+
+`GET /query/{run_id}/stream` still forwards agent events unchanged and closes after the first `completed` or `failed` event. A timeout or a disconnect while the run is still `in_progress` is documented as a backend-generated `failed` event (`Agent timeout` or `Stream error`). That path is not an agent status and is not retried. Client disconnect still only drops the local registry mapping. The agent run keeps going.
+
+Tests cover a malformed stream that sends both terminal events, and a real agent stream that ends after `in_progress`: one `Stream error`, one HTTP GET, and the registry entry removed. `python3 -m pytest -q` passed (52 tests).
+
+Files changed:
+
+- `app/routers/query.py`
+- `tests/test_stream_endpoint.py`

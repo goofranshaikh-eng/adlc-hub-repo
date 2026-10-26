@@ -1,0 +1,25 @@
+POST `/query` now forwards the agent's immediate reply and only stores the client-to-agent run id mapping.
+
+A valid body gets a new UUID4 `run_id`, one call to `AgentClient.initiate_query()`, then `RunRegistry.register()` after the agent answers. The response is `{"status": "ok"|"rejected", "run_id": "<uuid>"}` with HTTP 200. Timeouts, connection failures, and agent HTTP errors return 503 `{"detail": "Agent service unavailable"}` and do not register a run. Anything else returns 500 `{"detail": "Internal server error"}`. Exception details are logged on the server only.
+
+**Files changed**
+- `app/routers/query.py` — POST `/query` handler
+- `app/routers/__init__.py` — router package
+- `app/main.py` — FastAPI app
+- `app/dependencies.py` — singleton `AgentClient` for dependency injection
+- `tests/test_query_endpoint.py` — ok, rejected, 503, registry, 422, and 500 cases
+- `pyproject.toml` — `fastapi` dependency
+
+**Tests:** 38 passed. Starlette emits an existing deprecation warning about `httpx` versus `httpx2` when `TestClient` is imported.
+The forge review gaps on POST `/query` and the SSE stream are closed. All 51 tests passed.
+
+`POST /query` now has a 12-request concurrent check, and each reply still returns in under 100ms. An agent drop before a terminal event raises `AgentConnectionError` on that single subscription and is not retried. The stream still forwards only the first of `completed` or `failed`, then closes. Timeout `failed` events are documented as backend-generated, and client disconnect still drops only the local registry mapping.
+
+Files changed:
+
+- `app/services/agent_client.py`
+- `app/routers/query.py`
+- `app/streaming.py`
+- `tests/test_query_endpoint.py`
+- `tests/test_agent_client.py`
+- `tests/test_stream_endpoint.py`

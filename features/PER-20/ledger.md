@@ -1,0 +1,39 @@
+# ledger
+
+JSON:{"key": "intake:PER-20", "intent": "intake", "result": {"hash": "69572336c037b7b7"}, "at": "2026-10-21T05:54:08.244290+00:00"}
+JSON:{"key": "codehost:open-pr:hub:PER-20:tpm", "intent": "open_hub_pr", "result": "7", "at": "2026-10-21T05:54:39.786498+00:00"}
+JSON:{"key": "tracker:create-subtask:PER-20:story:01-agent", "intent": "create_subtask", "result": "PER-21", "at": "2026-10-21T06:13:43.805836+00:00"}
+JSON:{"key": "tracker:create-subtask:PER-20:story:02-agent", "intent": "create_subtask", "result": "PER-22", "at": "2026-10-21T06:13:44.738322+00:00"}
+JSON:{"key": "tracker:create-subtask:PER-20:story:03-agent", "intent": "create_subtask", "result": "PER-23", "at": "2026-10-21T06:13:45.755713+00:00"}
+JSON:{"key": "tracker:create-subtask:PER-20:story:04-agent", "intent": "create_subtask", "result": "PER-24", "at": "2026-10-21T06:13:46.711789+00:00"}
+JSON:{"key": "codehost:open-pr:hub:PER-20:architect", "intent": "open_hub_pr", "result": "8", "at": "2026-10-21T06:23:36.327652+00:00"}
+JSON:{"key": "codehost:open-pr:PER-20:agent", "intent": "open_pr", "result": "3", "at": "2026-10-21T07:09:28.205864+00:00"}
+JSON:{"key": "pr-comment-fixed:PER-20:agent:4333988079", "intent": "major_human", "result": "4333988079", "at": "2026-10-21T07:10:18.578213+00:00"}
+JSON:{"key": "pr-comment-fixed:PER-20:agent:4333988087", "intent": "major_human", "result": "4333988087", "at": "2026-10-21T07:10:21.956840+00:00"}
+JSON:{"key": "pr-comment-fixed:PER-20:agent:4333988105", "intent": "major_human", "result": "4333988105", "at": "2026-10-21T07:10:30.151439+00:00"}
+JSON:{"key": "pr-comment-fixed:PER-20:agent:4333988146", "intent": "major_human", "result": "4333988146", "at": "2026-10-21T07:10:45.509854+00:00"}
+JSON:{"key": "pr-comment-fixed:PER-20:agent:4333988092", "intent": "fix_code", "result": "4333988092", "at": "2026-10-21T07:42:55.288834+00:00"}
+JSON:{"key": "pr-comment-fixed:PER-20:agent:4333988117", "intent": "fix_code", "result": "4333988117", "at": "2026-10-21T07:48:12.561355+00:00"}
+JSON:{"key": "pr-comment-fixed:PER-20:agent:4333988123", "intent": "fix_code", "result": "4333988123", "at": "2026-10-21T07:48:12.561824+00:00"}
+JSON:{"key": "pr-comment-fixed:PER-20:agent:4333988155", "intent": "fix_code", "result": "4333988155", "at": "2026-10-21T07:48:12.562482+00:00"}
+JSON:{"key": "pr-comment-resolved:PER-20:agent:4333988092", "intent": "still_open", "result": "4333988092", "at": "2026-10-21T07:48:21.188605+00:00"}
+JSON:{"key": "pr-comment-resolved:PER-20:agent:4333988117", "intent": "resolved", "result": "4333988117", "at": "2026-10-21T07:48:27.645575+00:00"}
+JSON:{"key": "pr-comment-resolved:PER-20:agent:4333988123", "intent": "still_open", "result": "4333988123", "at": "2026-10-21T07:48:32.479120+00:00"}
+JSON:{"key": "pr-comment-resolved:PER-20:agent:4333988155", "intent": "resolved", "result": "4333988155", "at": "2026-10-21T07:48:37.704511+00:00"}
+JSON:{"key": "pr-comment-fixed:PER-20:agent:4333988134", "intent": "fix_code", "result": "4333988134", "at": "2026-10-21T08:33:54.881207+00:00"}
+JSON:{"key": "pr-comment-fixed:PER-20:agent:4333988165", "intent": "update_specs_then_code", "result": "4333988165", "at": "2026-10-21T09:03:37.413261+00:00"}
+JSON:{"key": "pr-comment-resolved:PER-20:agent:4333988134", "intent": "still_open", "result": "4333988134", "at": "2026-10-21T09:03:45.765136+00:00"}
+JSON:{"key": "pr-comment-resolved:PER-20:agent:4333988165", "intent": "resolved", "result": "4333988165", "at": "2026-10-21T09:03:52.350985+00:00"}
+JSON:{"key": "pr-comment-fixed:PER-20:agent:4333992871", "intent": "fix_code", "result": "4333992871", "at": "2026-10-21T09:36:16.393537+00:00"}
+JSON:{"key": "pr-comment-fixed:PER-20:agent:4334244461", "intent": "fix_code", "result": "4334244461", "at": "2026-10-21T10:07:42.421985+00:00"}
+JSON:{"key": "pr-comment-fixed:PER-20:agent:4334286480", "intent": "dismiss", "result": "4334286480", "at": "2026-10-21T10:07:49.754576+00:00"}
+JSON:{"key": "pr-comment-fixed:PER-20:agent:4334287264", "intent": "dismiss", "result": "4334287264", "at": "2026-10-21T10:07:53.338426+00:00"}
+JSON:{"key": "pr-comment-fixed:PER-20:agent:4334287948", "intent": "dismiss", "result": "4334287948", "at": "2026-10-21T10:07:59.884437+00:00"}
+JSON:{"key": "pr-comment-resolved:PER-20:agent:4333992871", "intent": "still_open", "result": "4333992871", "at": "2026-10-21T10:08:07.730796+00:00"}
+JSON:{"key": "pr-comment-resolved:PER-20:agent:4334244461", "intent": "still_open", "result": "4334244461", "at": "2026-10-21T10:08:12.592022+00:00"}
+JSON:{"key": "pr-comment-fixed:PER-20:agent:4334288563", "intent": "dismiss", "result": "4334288563", "at": "2026-10-21T10:09:24.723308+00:00"}
+JSON:{"key": "pr-comment-fixed:PER-20:agent:4334449825", "intent": "dismiss", "result": "4334449825", "at": "2026-10-21T10:09:27.859238+00:00"}
+JSON:{"key": "pr-comment-fixed:PER-20:agent:4334675272", "intent": "fix_code", "result": "4334675272", "at": "2026-10-21T10:45:37.343105+00:00"}
+JSON:{"key": "pr-comment-fixed:PER-20:agent:4334940231", "intent": "dismiss", "result": "4334940231", "at": "2026-10-21T10:45:44.969994+00:00"}
+JSON:{"key": "pr-comment-fixed:PER-20:agent:4334941283", "intent": "dismiss", "result": "4334941283", "at": "2026-10-21T10:45:47.717116+00:00"}
+JSON:{"key": "pr-comment-resolved:PER-20:agent:4334675272", "intent": "still_open", "result": "4334675272", "at": "2026-10-21T10:45:54.763625+00:00"}

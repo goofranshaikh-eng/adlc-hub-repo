@@ -1,0 +1,63 @@
+Connection lost, reconnecting to https://agentn.global.api5.cursor.sh (attempt 1)...
+Retry attempt 1...
+Connection lost, reconnecting to https://agentn.global.api5.cursor.sh (attempt 2)...
+Retry attempt 2...
+Connection lost, reconnecting to https://agentn.global.api5.cursor.sh (attempt 3)...
+Retry attempt 3...
+Connection lost, reconnecting to https://agentn.global.api5.cursor.sh (attempt 4)...
+Retry attempt 4...
+Connection lost, reconnecting to https://agentn.global.api5.cursor.sh (attempt 5)...
+Retry attempt 5...
+RetriableError: Connection stalled repeatedly
+Connection lost, reconnecting to https://agentn.global.api5.cursor.sh (attempt 1)...
+Retry attempt 1...
+Connection lost, reconnecting to https://agentn.global.api5.cursor.sh (attempt 2)...
+Retry attempt 2...
+PER-5 story 01-graphql is implemented. The GraphQL service exposes mock SalesOrder, Employee, Passport, and LegalCase data through six query resolvers, and all 8 tests passed.
+
+Files added:
+
+- `app/__init__.py` — package marker
+- `app/main.py` — FastAPI app with Strawberry mounted at `/graphql`
+- `app/schema.py` — the four types and the six query resolvers
+- `app/mocks.py` — in-memory fixtures for all four sources
+- `tests/test_graphql.py` — the eight GraphQL operation tests
+
+Query fields stay snake_case (`salesorder_list`, `get_employee_by_id`) so the story’s queries match. Type fields are camelCase (`accountName`, `employeeId`) through Strawberry’s default naming.
+PER-5 story 01-graphql is implemented. The GraphQL service exposes mock SalesOrder, Employee, Passport, and LegalCase data through six query resolvers, and all 8 tests passed.
+
+Files added:
+
+- `app/__init__.py` — package marker
+- `app/main.py` — FastAPI app with Strawberry mounted at `/graphql`
+- `app/schema.py` — the four types and the six query resolvers
+- `app/mocks.py` — in-memory fixtures for all four sources
+- `tests/test_graphql.py` — the eight GraphQL operation tests
+
+Query fields stay snake_case (`salesorder_list`, `get_employee_by_id`) so the story’s queries match. Type fields are camelCase (`accountName`, `employeeId`) through Strawberry’s default naming.
+PER-5 story `01-graphql` is implemented. The GraphQL service exposes mock SalesOrder, Employee, Passport, and LegalCase data through six query resolvers, and all **8 tests passed**.
+
+**Files (story file plan):**
+
+- `app/__init__.py` — package marker
+- `app/main.py` — FastAPI app with Strawberry mounted at `/graphql`
+- `app/schema.py` — four types and six query resolvers
+- `app/mocks.py` — in-memory fixtures for all four sources
+- `tests/test_graphql.py` — eight GraphQL operation tests
+
+Query fields stay snake_case (`salesorder_list`, `get_employee_by_id`) so the story’s queries match. Type fields are camelCase (`accountName`, `employeeId`) via Strawberry’s default naming.
+
+No hub specs were modified.
+PER-5 story `01-graphql` is implemented. The GraphQL service exposes mock SalesOrder, Employee, Passport, and LegalCase data through six query resolvers, and all **8 tests passed**.
+
+**Files (story file plan):**
+
+- `app/__init__.py` — package marker
+- `app/main.py` — FastAPI app with Strawberry mounted at `/graphql`
+- `app/schema.py` — four types and six query resolvers
+- `app/mocks.py` — in-memory fixtures for all four sources
+- `tests/test_graphql.py` — eight GraphQL operation tests
+
+Query fields stay snake_case (`salesorder_list`, `get_employee_by_id`) so the story’s queries match. Type fields are camelCase (`accountName`, `employeeId`) via Strawberry’s default naming.
+
+No hub specs were modified.

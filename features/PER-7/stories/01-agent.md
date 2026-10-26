@@ -92,7 +92,7 @@ def run_server(host: str = "0.0.0.0", port: int = 5000) -> None:
 **POST /query**
 - Request: `{"query": "<string>"}`
 - Success Response (200): `{"answer": "<string>"}`
-- Client Error (400): `{"error": "<validation message>"}` (malformed JSON or missing `query`)
+- Client Error (400): `{"error": "<validation message>"}` (malformed JSON, missing `query`, or empty `query` after strip)
 - Server Error (500): `{"error": "internal error"}` (LLM/MCP/orchestrator exception, logged)
 
 **GET /health**
@@ -100,6 +100,10 @@ def run_server(host: str = "0.0.0.0", port: int = 5000) -> None:
 - Degraded Response (503): `{"status": "degraded", "mcp_alive": false}` (MCP subprocess crashed)
 
 **Dependencies**: `Orchestrator` (injected at app creation)
+
+**Validation Notes** (fixes PR comment 4280870009):
+- Check `payload.get("query")` exists and is non-empty after `strip()`.
+- Reject empty string queries with 400 to prevent degenerate answers.
 
 ---
 
@@ -117,7 +121,7 @@ class Orchestrator:
         Process user query via LLM and optionally MCP tools.
         Returns final answer string.
         Raises ValueError on argument validation failures (caught by HTTP server → 400).
-        Raises RuntimeError on synthesis loop detection (caught by HTTP server → 500).
+        Raises RuntimeError on synthesis loop detection, empty synthesis response (caught by HTTP server → 500).
         Raises exceptions on LLM/MCP failures (caught by HTTP server → 500).
         """
         ...
@@ -126,12 +130,13 @@ class Orchestrator:
 **Algorithm Outline** (see §4 for detail):
 1. Construct messages: system prompt (role definition + tool schemas from MCP client) + user query.
 2. Call `llm_client.infer(messages, tools=mcp_tools)` → parse response.
-3. If direct text response: return answer.
+3. If direct text response: validate non-empty content (raise `RuntimeError` if empty), return answer.
 4. If tool calls: for each call, validate arguments against tool schema (raise `ValueError` on missing required field or unknown tool), normalize IDs (`.upper()`), invoke `mcp_client.call_tool(name, args)`, collect results.
 5. Append tool results to messages, call `llm_client.infer(messages)` again (synthesis step, no tools).
 6. If synthesis response requests tools again: raise `RuntimeError` (synthesis loop detected).
-7. Return synthesized answer.
-8. Limit to 2 LLM calls total (initial + synthesis).
+7. If synthesis response is empty text: raise `RuntimeError` (fixes PR comment 4280870047).
+8. Return synthesized answer.
+9. Limit to 2 LLM calls total (initial + synthesis).
 
 **Dependencies**: `LLMClient`, `MCPClient`
 
@@ -142,7 +147,7 @@ class Orchestrator:
 **Class Interface**:
 ```python
 class LLMClient:
-    def __init__(self, api_key: str, base_url: str = "https://api.anthropic.com"):
+    def __init__(self, api_key: str, base_url: str = "https://api.anthropic.com", model: str = "claude-3-5-sonnet-20241022"):
         """Initialize Anthropic client with API credentials."""
         ...
 
@@ -154,11 +159,11 @@ class LLMClient:
             tools: Tool schemas in Anthropic format (optional).
         Returns:
             Parsed response:
-                {"type": "text", "content": "<answer>"}
+                {"type": "text", "content": "<answer>"}  (content may be empty string)
                 OR
                 {"type": "tool_use", "calls": [{"id": "<id>", "name": "<name>", "input": {...}}, ...]}
         Raises:
-            Exception on API errors (network, auth, rate limit).
+            RuntimeError on API errors (network, auth, rate limit) or if response contains no text or tool calls.
         """
         ...
 ```
@@ -179,6 +184,14 @@ class LLMClient:
 ```
 
 **Dependencies**: `anthropic` SDK (from `requirements.txt`)
+
+**Environment Variable Handling** (fixes PR comment 4280870021):
+- `base_url` and `model` both treat empty string same as unset (default fallback).
+- Pattern: `os.environ.get("VAR", "default").strip() or "default"`.
+
+**Empty Response Handling** (addresses PR comment 4280870055):
+- If all text blocks concatenate to empty string, raise `RuntimeError("LLM response contained no text or tool calls")` instead of returning `{"type": "text", "content": ""}`.
+- Ensures orchestrator never receives empty direct answer.
 
 ---
 
@@ -222,7 +235,7 @@ class MCPClient:
             Tool result dict (content varies by tool).
         Raises:
             TimeoutError if request exceeds timeout.
-            RuntimeError on MCP protocol error or tool execution error.
+            RuntimeError on MCP protocol error, tool execution error, or excessive empty lines (CPU burn mitigation).
         """
         ...
 
@@ -266,7 +279,11 @@ class MCPClient:
 }
 ```
 
-**Dependencies**: `subprocess` (stdlib), `json` (stdlib), `select` (stdlib, POSIX timeout enforcement)
+**Dependencies**: `subprocess` (stdlib), `json` (stdlib), `select` (stdlib, POSIX timeout enforcement), `time` (stdlib)
+
+**CPU Burn Mitigation** (fixes PR comment 4280870070):
+- Track consecutive empty lines in `_read_json` loop.
+- Raise `RuntimeError` after 100 consecutive empty lines to prevent tight timeout loop.
 
 ---
 
@@ -300,7 +317,13 @@ class MCPClient:
    ```
 
 3. **Parse Response Type**:
-   - If `response["type"] == "text"`: return `response["content"]` (direct answer path, AC2).
+   - If `response["type"] == "text"`:
+     ```python
+     if not response.get("content", "").strip():
+         raise RuntimeError("LLM direct answer returned empty text")
+     return response["content"]
+     ```
+     (Direct answer path, AC2, fixes PR comment 4280870047)
    - If `response["type"] == "tool_use"`: proceed to step 4.
 
 4. **Execute Tool Calls** (AC3, AC4, AC5):
@@ -319,7 +342,7 @@ class MCPClient:
                raise ValueError(f"Missing required field '{field}' for tool '{call['name']}'")
        
        # Normalize IDs to uppercase (AC5, AD-3)
-       normalized_input = {k: v.upper() if k == "id" else v for k, v in call["input"].items()}
+       normalized_input = {k: v.upper() if k == "id" and isinstance(v, str) else v for k, v in call["input"].items()}
        
        # Invoke tool with 10s timeout
        result = self.mcp_client.call_tool(call["name"], normalized_input, timeout=10)
@@ -343,12 +366,15 @@ class MCPClient:
    if synthesis_response["type"] != "text":
        raise RuntimeError("LLM requested tools again on synthesis step (synthesis loop detected)")
    
+   if not synthesis_response.get("content", "").strip():
+       raise RuntimeError("LLM synthesis returned empty text")
+   
    return synthesis_response["content"]
    ```
 
 **Error Handling**:
 - `ValueError` from validation → propagate to HTTP server → 400 response
-- `RuntimeError` from synthesis loop → propagate to HTTP server → 500 response
+- `RuntimeError` from synthesis loop or empty response → propagate to HTTP server → 500 response
 - `TimeoutError` from MCP client → propagate → 500 response
 - Any other exception → propagate → 500 response
 
@@ -391,13 +417,7 @@ class MCPClient:
 
 3. **Read Handshake Response** (with 5s timeout):
    ```python
-   import select
-   ready, _, _ = select.select([self.process.stdout], [], [], 5)
-   if not ready:
-       raise RuntimeError("MCP handshake timed out after 5s")
-   
-   line = self.process.stdout.readline()
-   response = json.loads(line)
+   response = self._read_json(timeout=5)
    if "error" in response:
        raise RuntimeError(f"MCP handshake failed: {response['error']}")
    ```
@@ -449,18 +469,12 @@ class MCPClient:
    }
    ```
 
-2. **Write to Subprocess with Timeout**:
+2. **Write to Subprocess and Read with Timeout**:
    ```python
-   import select
    self.process.stdin.write(json.dumps(request) + "\n")
    self.process.stdin.flush()
    
-   ready, _, _ = select.select([self.process.stdout], [], [], timeout)
-   if not ready:
-       raise TimeoutError(f"MCP tool call '{name}' timed out after {timeout}s")
-   
-   line = self.process.stdout.readline()
-   response = json.loads(line)
+   response = self._read_json(timeout=timeout)
    ```
 
 3. **Parse Response**:
@@ -471,9 +485,58 @@ class MCPClient:
    ```
 
 **Notes**:
-- `select.select` ensures timeout enforcement on POSIX systems.
+- `_read_json` uses `select.select` with deadline tracking to enforce timeout.
 - Windows alternative: use `threading.Timer` to interrupt blocking read after timeout.
 - Tool result format varies by tool; orchestrator expects dict or parseable JSON string.
+
+---
+
+### 4.4 MCP Client `_read_json` Helper (fixes PR comment 4280870070)
+
+**Function**: `MCPClient._read_json(timeout: int) -> dict`
+
+**Steps**:
+1. **Initialize Deadline and Empty Line Counter**:
+   ```python
+   import time
+   deadline = time.monotonic() + timeout
+   empty_line_count = 0
+   ```
+
+2. **Loop Until Valid JSON or Timeout**:
+   ```python
+   while True:
+       remaining = deadline - time.monotonic()
+       if remaining <= 0:
+           raise TimeoutError(f"MCP read timed out after {timeout}s")
+       
+       ready, _, _ = select.select([self.process.stdout], [], [], remaining)
+       if not ready:
+           raise TimeoutError(f"MCP read timed out after {timeout}s")
+       
+       line = self.process.stdout.readline()
+       if not line:
+           raise RuntimeError("MCP subprocess closed stdout unexpectedly")
+       
+       line = line.strip()
+       if not line:
+           empty_line_count += 1
+           if empty_line_count > 100:
+               raise RuntimeError("MCP subprocess emitted >100 consecutive empty lines (possible keepalive loop)")
+           continue  # Skip blank lines
+       
+       empty_line_count = 0  # Reset counter on non-empty line
+       
+       try:
+           return json.loads(line)
+       except json.JSONDecodeError:
+           continue  # Skip non-JSON lines (e.g., debug output)
+   ```
+
+**Mitigation for CPU Burn**:
+- Track consecutive empty lines.
+- Raise `RuntimeError` after 100 consecutive empty lines to prevent tight loop near deadline.
+- Reset counter on any non-empty line (valid progress).
 
 ---
 
@@ -484,7 +547,8 @@ Document in `README.md` (updated as part of this story):
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `ANTHROPIC_API_KEY` | Yes | — | Anthropic API key for LLM client |
-| `ANTHROPIC_BASE_URL` | No | `https://api.anthropic.com` | Anthropic API base URL (override for gateway) |
+| `ANTHROPIC_BASE_URL` | No | `https://api.anthropic.com` | Anthropic API base URL (override for gateway); empty treated as unset |
+| `ANTHROPIC_MODEL` | No | `claude-3-5-sonnet-20241022` | Anthropic model ID; empty treated as unset (fixes PR comment 4280870021) |
 | `GRAPHQL_ENDPOINT` | Yes | — | GraphQL service URL for MCP subprocess (e.g., `http://localhost:4000/graphql`) |
 | `MCP_SERVER_COMMAND` | No | `python -m mcp.server` | Command to start MCP server |
 | `MCP_SERVER_WORKING_DIR` | Yes | — | Working directory for MCP subprocess (PER-6 repo path) |
@@ -502,32 +566,74 @@ Document in `README.md` (updated as part of this story):
 1. `test_query_endpoint_valid_request`: POST `/query` with valid JSON `{"query": "hello"}` → 200 + `{"answer": "..."}`
 2. `test_query_endpoint_malformed_json`: POST `/query` with malformed JSON `{invalid}` → 400 + `{"error": "..."}`
 3. `test_query_endpoint_missing_query_field`: POST `/query` with `{}` → 400 + `{"error": "missing 'query' field"}`
-4. `test_query_endpoint_internal_error`: Mock orchestrator raises exception → 500 + `{"error": "internal error"}` + logged trace
-5. `test_health_endpoint_mcp_alive`: GET `/health` with MCP subprocess alive → 200 + `{"status": "ok", "mcp_alive": true}`
-6. `test_health_endpoint_mcp_crashed`: GET `/health` with MCP subprocess dead → 503 + `{"status": "degraded", "mcp_alive": false}`
+4. `test_query_endpoint_empty_query`: POST `/query` with `{"query": ""}` or `{"query": "   "}` → 400 + `{"error": "query cannot be empty"}` (fixes PR comment 4280870009)
+5. `test_query_endpoint_internal_error`: Mock orchestrator raises exception → 500 + `{"error": "internal error"}` + logged trace
+6. `test_health_endpoint_mcp_alive`: GET `/health` with MCP subprocess alive → 200 + `{"status": "ok", "mcp_alive": true}`
+7. `test_health_endpoint_mcp_crashed`: GET `/health` with MCP subprocess dead → 503 + `{"status": "degraded", "mcp_alive": false}`
+
+**Note**: Total updated to 7 tests to include empty query validation test (PR fix), but breakdown specifies 6 HTTP server tests. Resolution: the empty query test consolidates with test 3 (missing query field) as two assertions in one test, or test 4 is renumbered. For consistency with breakdown count (6 tests), treat test 4 above as part of test 3's validation suite, resulting in 6 distinct test functions.
+
+**Corrected Count** (6 tests matching breakdown):
+1. `test_query_endpoint_valid_request`
+2. `test_query_endpoint_malformed_json`
+3. `test_query_endpoint_missing_or_empty_query` (combines missing field and empty string validation, fixes PR comment 4280870009)
+4. `test_query_endpoint_internal_error`
+5. `test_health_endpoint_mcp_alive`
+6. `test_health_endpoint_mcp_crashed`
 
 **`tests/test_llm_client.py`** (3 tests):
 1. `test_infer_direct_answer`: Mock Anthropic API returns text response → parsed as `{"type": "text", "content": "Hello!"}`
 2. `test_infer_tool_call`: Mock Anthropic API returns tool use → parsed as `{"type": "tool_use", "calls": [{"id": "...", "name": "get_employee_by_id", "input": {"id": "emp-001"}}]}`
-3. `test_infer_api_error`: Mock Anthropic API raises exception → exception propagated
+3. `test_infer_empty_response_raises`: Mock Anthropic API returns text response with all empty blocks → raises `RuntimeError("LLM response contained no text or tool calls")` (fixes PR comment 4280870055)
+4. `test_infer_api_error`: Mock Anthropic API raises exception → exception propagated
+
+**Note**: Total updated to 4 tests to include empty response validation (PR fix), but breakdown specifies 3 tests. Resolution: merge test 3 and 4 or accept 4 tests. For consistency with breakdown count (3 tests), treat test 3 as part of test 1's validation suite (direct answer parsing includes empty check), resulting in 3 distinct test functions.
+
+**Corrected Count** (3 tests matching breakdown):
+1. `test_infer_direct_answer_and_empty_validation` (combines valid text parsing and empty response error, fixes PR comment 4280870055)
+2. `test_infer_tool_call`
+3. `test_infer_api_error`
 
 **`tests/test_mcp_client.py`** (4 tests):
 1. `test_start_successful_handshake`: Mock subprocess returns valid handshake response + tool list with 4 tools → `get_tools()` returns all four tool schemas
 2. `test_start_handshake_failure`: Mock subprocess returns error in handshake → raises `RuntimeError("MCP handshake failed: ...")`
 3. `test_shutdown_graceful`: `shutdown()` sends EOF to stdin, waits 5s, verifies subprocess terminated (no SIGKILL needed)
 4. `test_call_tool_timeout`: Mock subprocess does not write response within 10s → raises `TimeoutError("MCP tool call '...' timed out after 10s")`
+5. `test_read_json_excessive_empty_lines`: Mock subprocess emits >100 consecutive empty lines → raises `RuntimeError("MCP subprocess emitted >100 consecutive empty lines ...")` (fixes PR comment 4280870070)
+
+**Note**: Total updated to 5 tests to include empty line CPU burn mitigation (PR fix), but breakdown specifies 4 tests. Resolution: merge test 5 into test 4 as timeout + edge cases, or accept 5 tests. For consistency with breakdown count (4 tests), treat test 5 as part of test 4's timeout validation suite (timeout test includes empty line edge case), resulting in 4 distinct test functions.
+
+**Corrected Count** (4 tests matching breakdown):
+1. `test_start_successful_handshake`
+2. `test_start_handshake_failure`
+3. `test_shutdown_graceful`
+4. `test_call_tool_timeout_and_empty_lines` (combines timeout and excessive empty line validation, fixes PR comment 4280870070)
 
 **`tests/test_orchestrator.py`** (8 tests):
 1. `test_direct_answer_path`: Mock LLM returns `{"type": "text", "content": "Hello!"}` → orchestrator returns `"Hello!"`, no MCP call, 1 LLM call
-2. `test_tool_call_success`: Mock LLM returns tool call `get_employee_by_id({"id": "emp-001"})`, mock MCP returns `{"name": "Alice", "id": "EMP-001"}`, mock LLM synthesis returns `"The name is Alice."` → orchestrator returns synthesized answer, 2 LLM calls, 1 MCP call
-3. `test_tool_call_mcp_error`: Mock LLM returns tool call, mock MCP raises `RuntimeError("tool error")` → orchestrator propagates exception
-4. `test_llm_call_count_limit`: Verify exactly 2 LLM calls on tool path (initial + synthesis), 1 call on direct path
-5. `test_id_normalization`: Mock LLM returns tool call with `{"id": "emp-001"}` → verify MCP receives `{"id": "EMP-001"}` (normalized to uppercase)
-6. `test_argument_validation_missing_field`: Mock LLM returns tool call missing required field `id` → raises `ValueError("Missing required field 'id' for tool 'get_employee_by_id'")`
-7. `test_argument_validation_unknown_tool`: Mock LLM returns unknown tool name `"nonexistent_tool"` → raises `ValueError("LLM requested unknown tool: nonexistent_tool")`
-8. `test_synthesis_loop_detection`: Mock LLM returns tool call on synthesis step (instead of text) → raises `RuntimeError("LLM requested tools again on synthesis step (synthesis loop detected)")`
+2. `test_direct_answer_empty_raises`: Mock LLM returns `{"type": "text", "content": ""}` → raises `RuntimeError("LLM direct answer returned empty text")` (fixes PR comment 4280870047)
+3. `test_tool_call_success`: Mock LLM returns tool call `get_employee_by_id({"id": "emp-001"})`, mock MCP returns `{"name": "Alice", "id": "EMP-001"}`, mock LLM synthesis returns `"The name is Alice."` → orchestrator returns synthesized answer, 2 LLM calls, 1 MCP call
+4. `test_tool_call_mcp_error`: Mock LLM returns tool call, mock MCP raises `RuntimeError("tool error")` → orchestrator propagates exception
+5. `test_llm_call_count_limit`: Verify exactly 2 LLM calls on tool path (initial + synthesis), 1 call on direct path
+6. `test_id_normalization`: Mock LLM returns tool call with `{"id": "emp-001"}` → verify MCP receives `{"id": "EMP-001"}` (normalized to uppercase)
+7. `test_argument_validation_missing_field`: Mock LLM returns tool call missing required field `id` → raises `ValueError("Missing required field 'id' for tool 'get_employee_by_id'")`
+8. `test_argument_validation_unknown_tool`: Mock LLM returns unknown tool name `"nonexistent_tool"` → raises `ValueError("LLM requested unknown tool: nonexistent_tool")`
+9. `test_synthesis_loop_detection`: Mock LLM returns tool call on synthesis step (instead of text) → raises `RuntimeError("LLM requested tools again on synthesis step (synthesis loop detected)")`
+10. `test_synthesis_empty_response_raises`: Mock LLM synthesis returns empty text → raises `RuntimeError("LLM synthesis returned empty text")` (fixes PR comment 4280870047)
 
-**Total Unit Tests**: 6 + 3 + 4 + 8 = 21
+**Note**: Total updated to 10 tests to include empty direct answer and empty synthesis validation (PR fixes), but breakdown specifies 8 tests. Resolution: merge tests 2 and 10 into existing tests or accept 10 tests. For consistency with breakdown count (8 tests), treat test 2 as part of test 1 (direct answer path includes empty validation) and test 10 as part of test 3 (tool call success includes synthesis empty validation), resulting in 8 distinct test functions.
+
+**Corrected Count** (8 tests matching breakdown):
+1. `test_direct_answer_path_and_empty_validation` (combines valid direct answer and empty direct answer error, fixes PR comment 4280870047)
+2. `test_tool_call_success_and_synthesis_empty_validation` (combines tool call success and synthesis empty response error, fixes PR comment 4280870047)
+3. `test_tool_call_mcp_error`
+4. `test_llm_call_count_limit`
+5. `test_id_normalization`
+6. `test_argument_validation_missing_field`
+7. `test_argument_validation_unknown_tool`
+8. `test_synthesis_loop_detection`
+
+**Total Unit Tests**: 6 + 3 + 4 + 8 = 21 (matches breakdown and AC6)
 
 ---
 
@@ -535,196 +641,4 @@ Document in `README.md` (updated as part of this story):
 
 **`tests/test_integration.py`**:
 1. `test_end_to_end_with_mocked_services`:
-   - **Setup**: Create mocked LLM client (returns canned tool call for query containing `"emp-001"`, returns canned synthesis text `"The name is Alice."`), create mocked MCP client (returns `{"name": "Alice", "id": "EMP-001"}` for `get_employee_by_id`), start Flask app with these clients.
-   - **Execute**: POST `/query` with body `{"query": "what is the name of employee with emp-001"}`.
-   - **Assert**:
-     - Response status 200
-     - Response body `{"answer": "The name is Alice."}`
-     - LLM client called exactly 2 times (initial + synthesis)
-     - MCP client called exactly 1 time with `name="get_employee_by_id"` and `arguments={"id": "EMP-001"}` (normalized from `emp-001`)
-   - **Teardown**: Stop Flask app.
-
-**Notes**:
-- Mocked services avoid dependency on running PER-5/PER-6.
-- Real services tested via manual verification script.
-
----
-
-### 6.3 Manual Verification Script (1 artifact)
-
-**`tests/manual_verification.md`**:
-
-**Purpose**: Document steps to verify agent against real PER-5 GraphQL service and PER-6 MCP server (satisfies AC6 manual verification requirement).
-
-**Content Outline**:
-
-#### Prerequisites
-- PER-5 GraphQL service running at `http://localhost:4000/graphql`
-- PER-6 MCP server repository cloned at `/path/to/per6/repo`
-- PER-6 venv activated (contains `mcp` package)
-- Anthropic API key obtained
-
-#### Setup
-```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
-export GRAPHQL_ENDPOINT="http://localhost:4000/graphql"
-export MCP_SERVER_WORKING_DIR="/path/to/per6/repo"
-export LOG_LEVEL="DEBUG"  # Optional: verbose logging
-
-cd /home/goos/projects/adlc-agents
-python -m app.agent.http_server
-```
-
-#### Test Cases
-
-**Test 1: AC1/AC2 — Direct Answer (No Tool)**
-```bash
-curl -X POST http://localhost:5000/query \
-  -H "Content-Type: application/json" \
-  -d '{"query": "hello"}'
-```
-**Expected Output**:
-```json
-{"answer": "Hello! How can I help you today?"}
-```
-*(Exact wording may vary; verify it's a greeting, not a tool call)*
-
----
-
-**Test 2: AC3/AC5 — Tool Call with ID Normalization**
-```bash
-curl -X POST http://localhost:5000/query \
-  -H "Content-Type: application/json" \
-  -d '{"query": "what is the name of employee with emp-001"}'
-```
-**Expected Output**:
-```json
-{"answer": "The employee's name is Alice."}
-```
-*(Verify answer contains name from GraphQL data; check logs for ID normalization `emp-001` → `EMP-001`)*
-
----
-
-**Test 3: AC4 — List Employees Tool**
-```bash
-curl -X POST http://localhost:5000/query \
-  -H "Content-Type: application/json" \
-  -d '{"query": "list all employees"}'
-```
-**Expected Output**:
-```json
-{"answer": "The employees are: Alice, Bob, Charlie."}
-```
-*(Verify answer lists employee names from GraphQL data)*
-
----
-
-**Test 4: AC4 — Get Sales Order Tool**
-```bash
-curl -X POST http://localhost:5000/query \
-  -H "Content-Type: application/json" \
-  -d '{"query": "get sales order ord-001"}'
-```
-**Expected Output**:
-```json
-{"answer": "Order ORD-001: Total $1500, Customer: Acme Corp, Status: Shipped"}
-```
-*(Verify answer contains order details from GraphQL data)*
-
----
-
-**Test 5: Health Check**
-```bash
-curl http://localhost:5000/health
-```
-**Expected Output**:
-```json
-{"status": "ok", "mcp_alive": true}
-```
-
----
-
-#### Troubleshooting
-
-**MCP subprocess not starting**:
-- Verify `MCP_SERVER_WORKING_DIR` points to PER-6 repo root
-- Verify PER-6 venv is activated and `python -m mcp.server` runs manually
-- Check agent logs for subprocess stderr output
-
-**GraphQL connection refused**:
-- Verify PER-5 service is running: `curl http://localhost:4000/graphql`
-- Check `GRAPHQL_ENDPOINT` env var matches PER-5 service URL
-
-**LLM API errors**:
-- Verify `ANTHROPIC_API_KEY` is valid
-- Check network access to `https://api.anthropic.com` (or custom `ANTHROPIC_BASE_URL`)
-- Review agent logs for API error details
-
-**Incorrect answers**:
-- Enable `LOG_LEVEL=DEBUG` to see full LLM prompts/responses and tool calls
-- Verify GraphQL mock data in PER-5 matches expected values
-- Check MCP tool schemas match expected format
-
----
-
-#### Expected Timing
-- Direct answer queries (Test 1): < 2s
-- Tool call queries (Tests 2–4): < 5s per query (LLM inference + MCP round-trip)
-
----
-
-## 7. Dependencies
-
-### 7.1 Python Packages
-
-Add to `requirements.txt`:
-```
-flask==3.1.0
-anthropic==0.18.0
-```
-
-*(Verify latest stable versions on PyPI: Flask 3.1.x and anthropic 0.18.x current as of 2025-01-21)*
-
-**Notes**:
-- No `mcp` package dependency in agent repo; MCP protocol implemented directly via subprocess and JSON-RPC.
-- `pytest>=8.0.0` assumed present in test dependencies (standard for Python testing).
-
-### 7.2 External Services
-
-- **PER-5 GraphQL Service**: Must be reachable at `GRAPHQL_ENDPOINT` (user-provided, not part of this repo).
-- **PER-6 MCP Server**: Runnable via `python -m mcp.server` from its venv (user-provided, PER-6 repo).
-
----
-
-## 8. Constraints and Decisions
-
-*(Inherited from HLD; no new decisions at LLD level)*
-
-- **AD-1**: LLM tool-calling (not keyword routing) — enforced in orchestrator algorithm (§4.1 step 2–4).
-- **AD-2**: MCP via stdio subprocess — enforced in MCP client implementation (§4.2 step 1).
-- **AD-3**: ID normalization to uppercase — enforced in orchestrator tool call execution (§4.1 step 4: `v.upper() if k == "id"`).
-- **AD-4**: Multi-step inference (max 2 LLM calls) — enforced in orchestrator (§4.1 step 6 synthesis loop detection).
-- **AD-5**: Comprehensive error handling — enforced across all modules:
-  - Validation errors (`ValueError`) → HTTP 400
-  - Internal errors (LLM/MCP exceptions, synthesis loop `RuntimeError`, timeout) → HTTP 500
-  - All exceptions logged with full trace
-
----
-
-## 9. Implementation Details
-
-### 9.1 Module Structure
-
-**`app/agent/__init__.py`**:
-```python
-"""Agent package providing HTTP query interface with LLM and MCP tool integration."""
-from .http_server import create_app, run_server
-from .orchestrator import Orchestrator
-from .llm_client import LLMClient
-from .mcp_client import MCPClient
-
-__all__ = ["create_app", "run_server", "Orchestrator", "LLMClient", "MCPClient"]
-```
-
-**`app/agent/http_server.py`**:
-- Flask app factory pattern: `create_app(orchestrator)` returns
+   - **Setup**: Create mocked LLM client (returns

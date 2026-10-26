@@ -1,0 +1,32 @@
+PER-7 story 01-agent is implemented. The agent answers `POST /query` directly or by calling the four PER-6 MCP tools over stdio, and uppercases `id` arguments before those calls.
+
+`pytest` result: **22 passed** (21 unit tests and 1 integration test).
+
+Files changed:
+
+- `app/__init__.py`
+- `app/agent/__init__.py`
+- `app/agent/http_server.py`
+- `app/agent/orchestrator.py`
+- `app/agent/llm_client.py`
+- `app/agent/mcp_client.py`
+- `tests/test_http_server.py`
+- `tests/test_llm_client.py`
+- `tests/test_mcp_client.py`
+- `tests/test_orchestrator.py`
+- `tests/test_integration.py`
+- `tests/manual_verification.md`
+- `README.md`
+- `requirements.txt` (`flask==3.1.0`, `anthropic==0.18.0`)
+- `pytest.ini` (puts the repo root on the import path so `pytest` can import `app`)
+
+Live PER-5 and PER-6 checks are documented in `tests/manual_verification.md` and were not run here.
+The five forge review comments are fixed, and the suite still matches the story: 21 unit tests plus 1 integration test. All 22 passed.
+
+- **Empty query.** `POST /query` with `{"query": ""}` or whitespace now returns 400 `{"error": "query cannot be empty"}` and never reaches the orchestrator.
+- **Empty model env.** An empty `ANTHROPIC_MODEL` is treated like unset and falls back to `claude-3-5-sonnet-20241022`, same pattern as `ANTHROPIC_BASE_URL`.
+- **Empty answers.** The orchestrator raises `RuntimeError` when a direct answer or a synthesis response is empty or whitespace.
+- **Empty LLM text.** If every text block concatenates to nothing, the LLM client raises `RuntimeError("LLM response contained no text or tool calls")`.
+- **Blank MCP lines.** `_read_json` counts consecutive empty lines and raises `RuntimeError` after 100, so keepalive blanks cannot spin the read loop.
+
+Files changed: `app/agent/http_server.py`, `app/agent/orchestrator.py`, `app/agent/llm_client.py`, `app/agent/mcp_client.py`, `README.md`, `tests/test_http_server.py`, `tests/test_llm_client.py`, `tests/test_orchestrator.py`, `tests/test_mcp_client.py`.

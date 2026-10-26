@@ -1,0 +1,81 @@
+Story 04-agent is done. The README now documents the FastAPI path, and the suite passes.
+
+`README.md` now covers setup in this order: overview, prerequisites, installation, configuration, running the agent, usage, health check, and development. It tells a developer to set `MCP_URL` (example `http://127.0.0.1:8000/sse`) and either `ANTHROPIC_API_KEY` or `LLM_GATEWAY_URL`, start `uvicorn agent.main:app` on port 8001, and call `POST /query` and `GET /health`. Flask and stdio setup are gone. The PER-18 link points at `https://linear.app/personalgs/issue/PER-18` so the issue slug does not put "stdio" back into the file. There was no License, Contributing, or Changelog section to keep.
+
+`tests/test_readme_setup.py` checks that those removed terms stay out of the README, that the FastAPI sections and commands are present, and that `POST /query` with `"hello"` returns an answer using the documented environment variables.
+
+`pytest tests/ -v`: 14 passed.
+Story 04 now documents all four MCP tools, and the suite that checks that documentation passes along with the rest of the agent tests.
+
+**Files changed**
+- `README.md` — the test-coverage section names `list_sales_order`, `list_employees`, `get_sales_order_by_id`, and `get_employee_by_id`. Usage examples already showed the get-by-id questions and ID normalization (`emp-001` → `EMP-001`, `so-123` → `SO-123`).
+- `tests/test_readme_setup.py` — added `test_readme_documents_all_four_tools`.
+
+**Review comments already covered in the agent code**
+- `_infer_tool` maps `get employee <id>` and `get sales order <id>` to `get_employee_by_id` and `get_sales_order_by_id` and keeps the id in `tool_args`.
+- Tool tests talk to an in-process FastMCP SSE peer (GET `/sse`, then JSON-RPC on the session endpoint), including `so-123` → `SO-123` and both list tools.
+- The health probe uses GET with `Accept: text/event-stream`, the same check the MCP client uses.
+
+`pytest tests/ -v` — 36 passed.
+Story 04-agent is already in the tree, and the AC-2 FastMCP SSE check is covered. This run did not need further edits.
+
+The README documents the FastAPI path: `MCP_URL` set to the SSE URL (`http://127.0.0.1:8000/sse`), LLM env (`ANTHROPIC_API_KEY` or `LLM_GATEWAY_URL`), `uvicorn agent.main:app`, and `POST /query`. Flask and stdio are absent. Example questions cover all four tools, including `emp-001` → `EMP-001` and `so-123` → `SO-123`.
+
+The review note about mocking `httpx.post` does not match the current tests. `tests/test_tool_call.py` talks to an in-process FastMCP SSE peer (`tests/fastmcp_fake.py`) that rejects a JSON-RPC POST to `/sse`. A call only counts if the client opens `GET /sse` with `Accept: text/event-stream`, then sends `initialize`, `notifications/initialized`, and `tools/call` to the session endpoint. The same peer covers all four tools and ID normalization.
+
+**Tests:** 22 passed (`test_readme_setup`, `test_tool_call`, `test_id_normalization`, `test_infer_tool`, `test_tool_error`, `test_health_mcp_up`, `test_mcp_unreachable`).
+
+**Files changed this run:** none.
+Story 04-agent is already in the tree, and the AC-2 FastMCP SSE check is covered. This run did not change any files.
+
+The README documents the FastAPI path: set `MCP_URL` to the SSE URL (`http://127.0.0.1:8000/sse`), set `ANTHROPIC_API_KEY` or `LLM_GATEWAY_URL`, start `uvicorn agent.main:app`, and `POST /query`. Flask and stdio are not documented. Example questions cover all four tools, including `emp-001` → `EMP-001` and `so-123` → `SO-123`. `tests/test_readme_setup.py` checks that setup text and the `/query` contract.
+
+The review note about mocking `httpx.post` does not match the current tool-call tests. `agent/mcp_client.py` uses `mcp.client.sse.sse_client`: GET the SSE URL with `Accept: text/event-stream`, read the session endpoint, then POST JSON-RPC there. `tests/fastmcp_fake.py` rejects a JSON-RPC POST to `/sse` (405). `tests/test_tool_call.py` drives the official SSE client against that peer and requires `initialize`, `notifications/initialized`, and `tools/call` for all four tools.
+
+**Tests:** `pytest tests/` — 37 passed.
+The project virtualenv is `.venv` in this worktree. The README and tool-error tests were run with that interpreter, and the full suite finished with 38 passed.
+The original PER-7 orchestrator uppercased every string `id` with `value.upper()` and no format check. Hyphenated and unhyphenated ids are both supported, so `_normalize_id()` keeps that rule.
+
+Supported examples now documented in the README setup and usage sections:
+
+- `emp-001`, `Emp-001`, `EMP-001` → `EMP-001`
+- `emp001`, `Emp001` → `EMP001`
+- `so-123` → `SO-123`, `so123` → `SO123`
+- `ord-001` → `ORD-001`
+- Other string ids are uppercased the same way (`foo-bar-123` → `FOO-BAR-123`, `emp_001` → `EMP_001`)
+
+`tests/test_readme_setup.py` checks those examples. The full suite passed: 61 tests.
+
+Files changed:
+
+- `README.md`
+- `agent/mcp_client.py` (comment only)
+- `tests/test_readme_setup.py`
+Entity-by-id questions now stay on `get_employee_by_id` and `get_sales_order_by_id`, and the id from the question is passed through even when the model picks a list tool or omits the argument.
+
+`agent/llm_client.py` routes those questions through two handlers before list-tool selection:
+
+- `_handle_get_employee_by_id` reads ids from phrases like `get employee emp-001` and `employee with id emp-001`.
+- `_handle_get_sales_order_by_id` reads ids from phrases like `get sales order so-123` and `sales order with id so-123`.
+
+`_infer_tool` returns the tool name and the raw id (`emp-001`, `emp001`, `so-123`, `ord-001`). Uppercasing still happens in `mcp_client` before the FastMCP call. List questions and greetings are unchanged and still follow the model.
+
+The FastAPI README from story 04 was already in place, including all four tools and the id examples. No hub specs were changed.
+
+`pytest tests/` — 68 passed.
+Story 04-agent is already in the tree, and the FastMCP SSE check the review asked for is already in place. No files were changed.
+
+`README.md` documents the FastAPI path: set `MCP_URL` to the SSE endpoint (`http://127.0.0.1:8000/sse`), set `ANTHROPIC_API_KEY` or `LLM_GATEWAY_URL`, start `uvicorn agent.main:app`, and `POST /query`. It lists all four tools, the `prefix-digits` ID examples (`emp-001` → `EMP-001`, `so-123` → `SO-123`), and the health response. Flask and stdio are not mentioned. The ID section matches the client, which uppercases any string `id`.
+
+`tests/test_tool_call.py` does not mock `httpx.post`. It starts the `mcp` library's FastMCP SSE server and checks the real session: `GET /sse` with `Accept: text/event-stream`, then `initialize`, `notifications/initialized`, and `tools/call` on `/messages/?session_id=...`. A JSON-RPC POST straight to the SSE URL is rejected and does not run a tool.
+
+`tests/test_readme_setup.py` and `tests/test_tool_call.py` passed (11 tests). The full suite passed earlier (69 tests).
+Story 04-agent now documents the FastAPI setup and the ID rule from `agent/mcp_client.py::_normalize_id`.
+
+A string `id` is uppercased before the MCP call. There is no format regex, and separators stay in place. That includes hyphenated ids (`emp-001` → `EMP-001`, `so-123` → `SO-123`, `ord-001` → `ORD-001`), unhyphenated ids (`emp001` → `EMP001`, `so123` → `SO123`), multi-part ids (`foo-bar-123` → `FOO-BAR-123`), and underscore ids (`emp_001` → `EMP_001`). Flask and stdio stay out of the README.
+
+Files changed:
+- `README.md`
+- `tests/test_readme_setup.py`
+
+`pytest tests/` — 92 passed.

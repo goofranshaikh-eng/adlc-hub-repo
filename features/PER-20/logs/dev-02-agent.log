@@ -1,0 +1,106 @@
+Story **02-agent** is implemented. All 6 tests passed.
+
+### What changed
+- **`agent/orchestrator.py`** — Routes questions through the LLM client; tool requests go to the MCP stub, then synthesis
+- **`agent/llm_client.py`** — Anthropic wrapper with greeting/help vs tool heuristics; synthesizes tool results
+- **`agent/mcp_stub.py`** — Always returns `{"error": "MCP not implemented"}`
+- **`agent/main.py`** — `/query` calls `process_question`
+- **`tests/test_query_direct.py`**, **`test_query_tool_stub.py`**, **`test_llm_unavailable.py`** — AC coverage
+- **`tests/test_query_stub.py`** — Dropped placeholder assertion; kept “stays up” with LLM mocked
+- **`requirements.txt`** — Added `anthropic`
+
+### Tests
+```text
+6 passed (story tests + health + stays-up)
+```
+The four forge comments are already implemented on this branch, and the suite that covers them passes.
+
+**Tool routing.** `_infer_tool` checks `get employee <id>` and `get sales order <id>` before the list heuristics, and puts the id in `tool_args`. `get employee emp-001` goes to `get_employee_by_id` with `{"id": "emp-001"}` instead of `list_employees`.
+
+**FastMCP SSE.** Tool-call tests talk to an in-process SSE peer. A JSON-RPC POST to the SSE URL is rejected. The client must GET `/sse` with `Accept: text/event-stream`, initialize the session, and POST `tools/call` to the message endpoint.
+
+**Four tools and id normalization.** `list_sales_order`, `list_employees`, `get_employee_by_id` (`emp-001` → `EMP-001`), and `get_sales_order_by_id` (`so-123` → `SO-123`) are all asserted on that SSE session.
+
+**Health probe.** `/health` uses the same GET and `Accept: text/event-stream` headers as the MCP client. The fake server answers HEAD with 501, and the up-check still reports `mcp_reachable: true`.
+
+`pytest` — 32 passed.
+
+Files that hold the fixes: `agent/llm_client.py`, `agent/health.py`, `agent/mcp_client.py`, `tests/fastmcp_fake.py`, `tests/test_infer_tool.py`, `tests/test_tool_inference.py`, `tests/test_tool_call.py`, `tests/test_id_normalization.py`, `tests/test_health_mcp_up.py`. No further edits this turn.
+The four forge comments for story 02-agent are covered, and the full suite passes (35 tests).
+
+`tests/test_query_tool_stub.py` now routes all four tools through the orchestrator, including get-by-id arguments:
+
+- `list_sales_order`
+- `list_employees`
+- `get_employee_by_id` with `{"id": "emp-001"}`
+- `get_sales_order_by_id` with `{"id": "so-123"}`
+
+The other review items were already in the branch:
+
+- **Tool inference.** `agent/llm_client.py` matches `get employee <id>` and `get sales order <id>` before the list heuristics, and puts the id in `tool_args`.
+- **FastMCP SSE.** `agent/mcp_client.py` opens the SSE stream with `Accept: text/event-stream`, then posts JSON-RPC to the session endpoint. `tests/fastmcp_fake.py` rejects a POST straight to the SSE URL. `tests/test_infer_tool.py` and `tests/test_tool_call.py` assert that handshake.
+- **ID normalization and tool coverage.** `tests/test_id_normalization.py` checks `emp-001` → `EMP-001` and `so-123` → `SO-123`. `tests/test_tool_call.py` exercises all four tools on that transport.
+- **Health probe.** `agent/health.py` probes with GET and the same SSE headers the client uses. `tests/test_health_mcp_up.py` checks that a live FastMCP endpoint reports `mcp_reachable: true`.
+Story 02-agent is already implemented in this tree, and the AC-2 FastMCP SSE check is already covered. No files were changed.
+
+Direct answers, tool routing, and LLM-down handling are in place:
+
+- `POST /query` goes through `agent/orchestrator.py`.
+- A greeting returns the LLM answer and does not call a tool (`tests/test_query_direct.py`).
+- Data questions route to one of `list_sales_order`, `list_employees`, `get_sales_order_by_id`, or `get_employee_by_id`, including `get employee emp-001` and `get sales order so-123` (`tests/test_query_tool_stub.py`).
+- An LLM failure returns `{"error": "LLM unavailable"}` and the process stays up (`tests/test_llm_unavailable.py`).
+
+The review note about mocking `httpx.post` does not match the current tool-call tests. `agent/mcp_client.py` uses `mcp.client.sse.sse_client`: GET the SSE URL with `Accept: text/event-stream`, read the session endpoint, then POST JSON-RPC there. `tests/fastmcp_fake.py` rejects a JSON-RPC POST to `/sse`. `tests/test_tool_call.py` and `tests/test_infer_tool.py` require the handshake `initialize`, `notifications/initialized`, `tools/call` for all four tools.
+
+**Tests:** 36 passed.
+The project virtualenv is at `.venv` in this worktree. The story tests were already run with that interpreter, and all 37 passed.
+The original stdio agent uppercased every string `id` with `value.upper()` and no format check. `emp001` and `ord-001` were already supported, so `_normalize_id()` keeps that behavior and the hyphen-only restriction was not added.
+
+Supported forms, all sent uppercased:
+
+| Input | Sent to the tool |
+|---|---|
+| `emp-001`, `Emp-001`, `EMP-001` | `EMP-001` |
+| `emp001`, `Emp001`, `EMP001` | `EMP001` |
+| `so-123`, `SO-123` | `SO-123` |
+| `so123` | `SO123` |
+| `ord-001`, `Ord-001` | `ORD-001` |
+
+The LLM returns the id as written. `mcp_client._normalize_id()` uppercases it before the FastMCP call. The setup section of the README shows these examples. Hub specs were left unchanged. 58 tests passed.
+
+Files changed:
+
+- `agent/mcp_client.py` — documents the stdio patterns on `_normalize_id()`
+- `agent/llm_client.py` — tool schemas accept hyphenated and unhyphenated ids and pass them through for normalization
+- `README.md` — setup and usage examples include `emp001`, `so123`, and `ord-001`
+- `tests/test_id_normalization.py`
+- `tests/test_infer_tool.py`
+- `tests/test_tool_inference.py`
+Entity-by-id questions now stay on `get_employee_by_id` and `get_sales_order_by_id`, and the id from the question is kept.
+
+`agent/llm_client.py` matches those two questions before the model’s tool choice is accepted. If the model picks a list tool, omits `id`, or answers in prose, the handler still sends the matching get-by-id tool with the raw id (`emp-001`, `emp001`, `Emp-001`, `so-123`, `so123`, `ord-001`). Uppercasing stays in `agent/mcp_client.py`. List and greeting questions are unchanged and still follow the model.
+
+`tests/test_tool_inference.py` covers that override. The full suite is **68 passed**. No further file edits were required; this behavior is already in the working tree.
+The tool-call test now checks the real FastMCP SSE handshake, so a plain JSON-RPC POST cannot pass it.
+
+`tests/test_tool_call.py` starts the official FastMCP SSE server and leaves `sse_client` unpatched. For each of the four tools it requires:
+
+- `GET /sse` with `Accept: text/event-stream` before any POST
+- no JSON-RPC POST to the SSE URL
+- `initialize`, then `notifications/initialized`, then `tools/call` on the session `/messages` URL
+- the call arguments the server actually receives (`emp-001` becomes `EMP-001`, `so-123` becomes `SO-123`)
+
+The story 02 query path was already in place: direct answers, tool routing, and `{"error": "LLM unavailable"}`.
+
+All 68 tests passed. File changed: `tests/test_tool_call.py`.
+Story 02 now keeps the original ID contract. Every string `id` is uppercased, including unhyphenated forms, and the question parser no longer drops IDs that fall outside a hyphenated `prefix-digits` pattern.
+
+The original stdio orchestrator used `value.upper()` whenever the argument key was `id`. There was no format check, so `emp001`, `foo-bar-123`, `emp_001`, and `001` were all in scope. `agent/mcp_client.py` still does that uppercasing before the FastMCP call. `agent/llm_client.py` only extracts the raw token with `[\w-]+` and leaves normalization to the client.
+
+`pytest tests/` — 84 passed.
+
+Files changed:
+- `agent/llm_client.py`
+- `tests/test_tool_inference.py`
+- `tests/test_infer_tool.py`
+- `tests/test_query_tool_stub.py`

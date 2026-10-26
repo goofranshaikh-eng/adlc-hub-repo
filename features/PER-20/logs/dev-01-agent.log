@@ -1,0 +1,116 @@
+Story 01-agent is implemented. The agent is a FastAPI app with a stub `POST /query` and a `GET /health` probe. The README was left unchanged, as that update belongs to Story 4.
+
+`GET /health` always returns `status: "up"` while the process is responding. `mcp_reachable` is true only when `MCP_URL` is set and a 2-second HEAD request returns a status below 500. The probe result is cached for 10 seconds. An unset, empty, or unreachable `MCP_URL` yields `mcp_reachable: false`. `POST /query` accepts a `question` and returns the Story 2 placeholder answer.
+
+`pytest tests/test_health.py tests/test_query_stub.py -v` — 4 passed.
+
+Files changed:
+- `agent/__init__.py`
+- `agent/main.py`
+- `agent/health.py`
+- `tests/test_health.py`
+- `tests/test_query_stub.py`
+- `requirements.txt`
+- `pytest.ini` (so `pytest` can import the `agent` package)
+The four forge review comments are fixed, and `pytest tests/ -v` passed (32 tests).
+
+**Tool routing.** `get employee emp-001` and `get sales order so-123` now select `get_employee_by_id` and `get_sales_order_by_id`, and the id is kept in `tool_args`. List questions still go to `list_employees` and `list_sales_order`.
+
+**FastMCP SSE.** Tool calls open a GET on `MCP_URL` with `Accept: text/event-stream`, read the session endpoint, then POST `initialize`, `notifications/initialized`, and `tools/call` to that endpoint. A JSON-RPC POST straight to the SSE URL is rejected by the test peer.
+
+**Tool coverage.** Tests exercise all four tools, including `so-123` → `SO-123` and `emp-001` → `EMP-001`.
+
+**Health probe.** `/health` uses the same SSE GET and reads the status from the headers, so a live FastMCP stream is reported reachable without calling a tool.
+
+Files changed:
+
+- `agent/llm_client.py`
+- `agent/mcp_client.py`
+- `agent/health.py`
+- `tests/fastmcp_fake.py`
+- `tests/test_tool_inference.py`
+- `tests/test_infer_tool.py`
+- `tests/test_tool_call.py`
+- `tests/test_id_normalization.py`
+- `tests/test_tool_error.py`
+- `tests/test_health_mcp_up.py`
+- `tests/test_mcp_unreachable.py`
+The four review comments are fixed, and all 32 tests passed.
+
+`get employee emp-001` and `get sales order so-123` now route to `get_employee_by_id` and `get_sales_order_by_id` with the id kept in `tool_args`. List questions still use `list_employees` and `list_sales_order`. Ids are normalized on the way out (`emp-001` to `EMP-001`, `so-123` to `SO-123`).
+
+Tool calls use the FastMCP SSE handshake: GET the SSE URL with `Accept: text/event-stream`, read the endpoint event, then POST `initialize`, `notifications/initialized`, and `tools/call` to that session URL. Tests talk to an in-process SSE peer that rejects a raw JSON-RPC POST to the SSE URL. The health probe uses that same GET, so a live SSE server is reported reachable.
+
+Files changed:
+- `agent/llm_client.py`
+- `agent/mcp_client.py`
+- `agent/health.py`
+- `tests/fastmcp_fake.py`
+- `tests/test_infer_tool.py`
+- `tests/test_tool_inference.py`
+- `tests/test_tool_call.py`
+- `tests/test_id_normalization.py`
+- `tests/test_tool_error.py`
+- `tests/test_mcp_unreachable.py`
+- `tests/test_health_mcp_up.py`
+The AC-2 FastMCP SSE gap is already closed in this tree, so no files were changed. Story 01’s FastAPI app, health probe, and query path are in place, and tool calls go through the official SSE client instead of a mocked `httpx.post`.
+
+`agent/mcp_client.py` calls tools with `mcp.client.sse.sse_client`: GET the SSE URL with `Accept: text/event-stream`, read the session endpoint, then POST JSON-RPC to that session URL. `tests/fastmcp_fake.py` is an in-process peer that rejects a JSON-RPC POST to the SSE URL. `tests/test_tool_call.py` drives that peer and checks the handshake (`initialize`, `notifications/initialized`, `tools/call`) for all four tools.
+
+`/tmp/per20-venv` was used so the `mcp` package was available. The full suite passed: **36 passed**.The background search for an installed `mcp` package was stopped because it was scanning the whole home directory. Dependencies were installed with `uv` instead, and the test suite still passed: 36 tests.
+Tool and MCP failures now come back as a clear error. When a tool result contains an `error` field, the agent returns that message directly and stays up. A successful tool result is still synthesized into an answer.
+
+`process_question` checks `tool_result.get("error")` before the second LLM call. A failure such as `{"error": "Employee not found"}` or `{"error": "MCP server unreachable"}` is returned as `{"error": "..."}`. The LLM is not asked to turn that into prose.
+
+Files changed:
+
+- `agent/orchestrator.py`
+- `tests/test_tool_error.py`
+- `tests/test_mcp_unreachable.py`
+- `tests/test_query_tool_stub.py`
+- `tests/test_id_normalization.py` (the fake tool result is a real CallToolResult, so a protocol failure is no longer hidden by synthesis)
+
+`pytest tests/` — 37 passed.
+The original stdio agent uppercased every string `id`, so unhyphenated forms like `emp001` were already supported. `_normalize_id()` now does the same thing, and the setup docs show those examples.
+
+The PER-7 stdio orchestrator (`app/agent/orchestrator.py` at `2b12859`) normalized ids with `value.upper()` whenever the argument key was `id`. It did not use a hyphen-only regex. These inputs all went through:
+
+| Input | Sent to the tool |
+|---|---|
+| `emp-001`, `Emp-001`, `EMP-001` | `EMP-001` |
+| `emp001`, `Emp001` | `EMP001` |
+| `so-123`, `SO-123` | `SO-123` |
+| `so123` | `SO123` |
+| `ord-001` | `ORD-001` |
+
+Other argument keys were left unchanged. Hub `requirements.md` was left as-is because the original format was broader than hyphenated `prefix-digits`.
+
+**Files changed**
+
+- `agent/mcp_client.py` — `_normalize_id()` uppercases any string `id` and documents the patterns above.
+- `tests/test_id_normalization.py` — covers hyphenated, unhyphenated, and already-uppercase ids on the tool-call path and directly.
+- `README.md` — Configuration and Usage show `emp-001` → `EMP-001`, `emp001` → `EMP001`, `so-123` → `SO-123`, and `so123` → `SO123`.
+- `tests/test_readme_setup.py` — asserts those examples stay in the README.
+
+`pytest tests/` — 52 passed.
+Entity-by-id questions now stay on `get_employee_by_id` and `get_sales_order_by_id`, with the id taken from the question.
+
+The model still chooses list tools and direct answers. When the question is a lookup by id, those two handlers override a list-tool choice, a missing `id`, or a prose reply so the id is not dropped. Hyphenated and unhyphenated forms are kept as written (`emp-001`, `emp001`, `Emp-001`, `so-123`, `so123`, `ord-001`); `mcp_client` still uppercases them before the FastMCP call.
+
+**Files changed**
+- `agent/llm_client.py` — handlers and id extraction
+- `tests/test_tool_inference.py` — cases where the model omits the tool or the id
+
+**Tests:** `68 passed` (`pytest tests`).
+The AC-2 tool-call test now talks to a real FastMCP SSE server instead of a mocked `httpx.post`.
+
+`tests/test_tool_call.py` starts the `mcp` library's FastMCP SSE app and leaves `sse_client` and `httpx` unpatched. A passing call has to open `GET /sse` with `Accept: text/event-stream`, then post the session to `/messages/`. A JSON-RPC POST straight to the SSE URL never reaches a tool on that server. The same test covers all four tools and checks that `emp-001` and `so-123` arrive as `EMP-001` and `SO-123`.
+
+The FastAPI app, health probe, and Story 01 tests were already in place. The full suite passed: 68 tests.
+Story 01 is already in place, and ID normalization matches the original agent. No files were changed.
+
+The original stdio orchestrator uppercased every string `id` with `value.upper()` when the argument key was `id`. There was no format regex, so `emp001` became `EMP001` the same way `emp-001` became `EMP-001`. `agent/mcp_client.py` still does that, and the README and `tests/test_id_normalization.py` record hyphenated and unhyphenated forms (`emp001`, `so123`, `foo-bar-123`, `emp_001`).
+
+Story 01’s FastAPI app, `GET /health`, and `POST /query` are unchanged. Health still reports the process as up and probes `MCP_URL` with `GET` and `Accept: text/event-stream`, without calling a tool.
+
+`pytest tests/` — 69 passed.

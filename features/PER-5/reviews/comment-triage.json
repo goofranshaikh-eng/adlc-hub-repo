@@ -1,0 +1,11 @@
+[
+  {
+    "repo": "graphql",
+    "pr_id": "1",
+    "comment_id": "4278870064",
+    "body": "**Unnecessary explicit field naming**: Lines 42, 46, 50, 56, 64, 68 use `@strawberry.field(name=\"...\")` to set GraphQL field names identical to the Python method names. Strawberry automatically converts snake_case method names to camelCase GraphQL field names, so `def salesorder_list(self)` already exposes as `salesorderList` in GraphQL without the explicit `name=` parameter. The `name=` parameter is only needed when you want the GraphQL name to differ from the Python name. Remove all six `name=` parameters \u2014 the resolvers will still work correctly and the code will be cleaner.",
+    "validity": "not_an_issue",
+    "tier": null,
+    "reason": "While removing explicit `name=` parameters would be cleaner, keeping them is a valid defensive programming practice. It makes the GraphQL contract explicit and readable, preventing accidental name changes if Strawberry's conversion logic changes. This is a style preference, not a defect."
+  }
+]

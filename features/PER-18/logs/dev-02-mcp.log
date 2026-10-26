@@ -1,0 +1,11 @@
+The GraphQL client for story 02-mcp is in place. `pytest` reports 8 passed (`tests/test_graphql_client.py` and `tests/test_server.py`), and `compileall` succeeded.
+
+`GraphQLClient.execute` posts the query with `httpx.AsyncClient` and returns the `data` object. It raises `GraphQLClientError` when the endpoint is unreachable (`"GraphQL endpoint unreachable"`), the response is not 2xx (`"GraphQL returned error: HTTP ..."`), or the JSON body contains GraphQL `errors` (`"GraphQL returned error: ..."`). A missing or blank endpoint still raises `ValueError` before any request.
+
+`server.py` still fails startup when `GRAPHQL_ENDPOINT` is missing, and now builds a shared client with `create_graphql_client()` for later tools.
+
+Files changed:
+
+- `graphql_client.py` (new)
+- `tests/test_graphql_client.py` (new)
+- `server.py`

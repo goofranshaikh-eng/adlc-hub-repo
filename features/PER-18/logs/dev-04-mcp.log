@@ -1,0 +1,10 @@
+Story 4 is implemented. End-to-end coverage now calls the four MCP tools and `/health` through the FastAPI app, with GraphQL mocked.
+
+**File changed:** `tests/test_integration.py`
+
+- Tests 14–17 call each tool over the in-process SSE app and check the success payloads.
+- Test 18 turns a GraphQL failure into `{"error": "..."}`, then confirms a later tool call and `/health` still succeed.
+- Test 19 checks `/health` returns 200 and `{"status": "ok"}`.
+- Test 20 checks an empty id returns `{"error": "Missing required parameter: id"}` and does not call GraphQL.
+
+`pytest -q` is green (21 passed) and Ruff is clean on the new file.

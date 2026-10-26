@@ -1,0 +1,14 @@
+Story 1 is in place in this worktree: a FastAPI app with `/health`, a FastMCP SSE endpoint at `/sse`, and startup validation for `GRAPHQL_ENDPOINT`.
+
+`GET /health` returns `200` and `{"status": "ok"}` without calling GraphQL. `GET /sse` completes the FastMCP SSE handshake and sends the `endpoint` event. No tools are registered. If `GRAPHQL_ENDPOINT` is missing, startup logs an error and raises `ValueError`. `main.py` runs `uvicorn server:app` using `HOST` (default `0.0.0.0`) and `PORT` (default `8000`).
+
+FastMCP 4.1.1 is pinned in `requirements.txt`. SSE is mounted with `http_app(path="/sse", transport="sse")`.
+
+**Files changed**
+- `server.py`
+- `main.py`
+- `tests/test_server.py`
+- `requirements.txt`
+- `pytest.ini`
+
+**Tests:** `python -m pytest -q` — 3 passed.Those background probes were temporary SSE checks from the implementation and were stopped on purpose. The story itself is already done: `/health` and the FastMCP `/sse` handshake are in place, and all 3 tests passed.

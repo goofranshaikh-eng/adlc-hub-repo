@@ -1,0 +1,11 @@
+Story 5 is done. `README.md` now documents the FastAPI + FastMCP HTTP path, and the existing tests still pass.
+
+**`README.md`**
+- Quick start: required `GRAPHQL_ENDPOINT`, optional `HOST` and `PORT`, `uvicorn server:app --host 0.0.0.0 --port 8000`, and `python main.py`.
+- MCP URL: `http://localhost:8000/sse`.
+- Short stdio-to-HTTP migration section (same tool names; client config uses the SSE URL).
+- Auth called out as deferred and out of scope for v1.
+
+**Tests:** `pytest` — 21 passed.
+
+The story’s definition of done also asks for a commit on `feat/PER-18`. That commit is not created yet.

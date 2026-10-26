@@ -1,0 +1,9 @@
+`RunRegistry` maps a client `run_id` to the agent's `agent_run_id` and stores nothing else. Registration rejects a duplicate `run_id`, and lookup and removal raise `RunNotFoundError` (a `KeyError`) when the id is missing. `get_run_registry()` returns the single instance created at import, for later dependency injection.
+
+Files changed:
+
+- `app/services/run_registry.py` — registry, collision and not-found errors, and the shared instance
+- `app/services/__init__.py` — exports those symbols
+- `tests/test_run_registry.py` — registration, lookup, removal, missing-id errors, and the ID-only storage check
+
+All 28 tests passed.

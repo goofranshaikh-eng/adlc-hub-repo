@@ -1,0 +1,23 @@
+FAIL
+
+- **AC count mismatch:** Requirements.md lists 5 ACs + 3 Exceptions. Breakdown Story 1 lists only 3 ACs (AC3, partial AC4, partial AC1) in its Acceptance Criteria section, missing AC2 and AC5 entirely from that story's AC list. Story 2 lists 3 items but calls them "Partial AC2", "Exception 1", "Startup validation" (not numbered as ACs). Story 3 lists 3 ACs (AC1, AC2, Exception 1) but omits AC5 from its AC section despite claiming coverage in Notes. Story 4 lists 3 ACs (AC5, partial AC1, partial AC2) but omits AC3. Story 5 lists 3 ACs (AC4, Exception 2, Exception 3). None of the stories list all 5 ACs + 3 Exceptions in their Acceptance Criteria sections, only subsets or "partial" claims. The traceability table at the end of breakdown.md maps all ACs correctly, but the per-story AC sections are incomplete.
+
+- **Test count mismatch:** Breakdown specifies 18 explicit tests across Stories 1–4 (Story 1: 3 tests, Story 2: 4 tests, Story 3: 6 tests, Story 4: 7 tests = 20 total, not 18; breakdown Summary says "Total 18 explicit tests" but the sum is 20). Story LLD (stories/01-graphql.md) lists 20 tests (Tests 1–20), matching the breakdown's per-story sums but contradicting the "18 explicit tests" claim in breakdown Notes. The story LLD is for "Story 01-graphql" but breakdown has 5 stories (IDs 1–5); the LLD does not specify which breakdown story it implements, and its title "01-graphql" does not match any breakdown story ID (Story 1 is "Set up FastAPI app with health endpoint and FastMCP SSE stub", not "01-graphql").
+
+- **File paths inconsistent with repo context:** Breakdown and story LLD specify `/home/goos/projects/adlc-mcp-server/` as root. Repo-tree/mcp confirms `root: /home/goos/projects/adlc-mcp-server` with only `README.md` existing. All new file paths in breakdown and LLD use this root correctly (e.g., `server.py`, `tools.py`, `tests/test_server.py`). No mismatch here, but the story LLD claims to be "Story 01-graphql" for repo `mcp`, yet breakdown does not define a story with ID "01-graphql"—breakdown stories are numbered 1–5 with descriptive titles, not "01-graphql". The LLD file is named `stories/01-graphql.md`, suggesting a story ID "01-graphql", but breakdown Story 1 is "Set up FastAPI app…" with no mention of "graphql" in its ID or title. This is a breakdown ↔ story ID mismatch.
+
+- **HLD outcome vs LLD:** HLD Section 4.1 specifies `/health` returns `{"status": "ok"}` (JSON object). LLD Section 3.1 and Test 1 match this (`{"status": "ok"}`). HLD Section 4.2 specifies tool success outputs as arrays or objects (e.g., `list_sales_order` → array of sales order objects). LLD Section 3.2 matches these shapes. No divergence in data contracts. HLD Section 11 lists concrete file paths matching LLD Section 2 (e.g., `server.py`, `tools.py`, `tests/test_server.py`). No mismatch here.
+
+- **Missing specs/<id>.md:** Proposed_tickets.md lists one child ticket: PER-19 (repo `mcp`). Specs/PER-19.md exists and is a Tech Stub for PER-19. No missing specs.
+
+- **Merged_plan.md presence:** No `merged_plan.md` mentioned or present in the provided artifacts. Not applicable.
+
+- **Change_requests.md presence:** No `change_requests.md` mentioned. Not applicable.
+
+- **Stack/language vs repo-context:** Tech stub (specs/PER-19.md) specifies Python 3.11+, FastAPI, FastMCP, httpx, pytest—consistent with a Python MCP server. Repo-tree/mcp shows `README.md` only, no existing Python files, but the task is to add a new HTTP server to replace stdio, so no contradiction. HLD and breakdown assume Python/FastAPI throughout, matching the ticket requirement. No stack mismatch.
+
+**Summary of concrete mismatches:**
+
+1. **AC count per story:** Breakdown stories list subsets of ACs in their Acceptance Criteria sections (Story 1: 3 ACs, Story 2: 3 items, Story 3: 3 ACs, Story 4: 3 ACs, Story 5: 3 ACs), not the full 5 ACs + 3 Exceptions from requirements. The traceability table claims full coverage, but the per-story AC lists are incomplete.
+2. **Test count:** Breakdown Notes claim "Total 18 explicit tests" but the per-story Verification Approach sums to 20 tests (Story 1: 3, Story 2: 4, Story 3: 6, Story 4: 7). Story LLD lists 20 tests (Tests 1–20), consistent with the sum but contradicting the "18" claim.
+3. **Story ID mismatch:** Story LLD is titled "Story 01-graphql" and filed as `stories/01-graphql.md`, but breakdown defines 5 stories with IDs 1–5 and descriptive titles (e.g., "Set up FastAPI app…"). No breakdown story has ID "01-graphql". The LLD does not specify which breakdown story it implements, and "01-graphql" does not match any breakdown story ID or title.

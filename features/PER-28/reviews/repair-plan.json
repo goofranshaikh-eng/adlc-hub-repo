@@ -1,0 +1,60 @@
+{
+  "comment_ids": [
+    "4374346571",
+    "4374346572",
+    "4374346576",
+    "4374346581",
+    "4374346586",
+    "4374346590",
+    "4374346608"
+  ],
+  "tier": "moderate",
+  "stories": [
+    "04-fastapi",
+    "05-fastapi"
+  ],
+  "items": [
+    {
+      "comment_id": "4374346571",
+      "repo": "fastapi",
+      "path": "app/routers/query.py",
+      "tier": "moderate"
+    },
+    {
+      "comment_id": "4374346572",
+      "repo": "fastapi",
+      "path": "app/services/agent_client.py",
+      "tier": "moderate"
+    },
+    {
+      "comment_id": "4374346576",
+      "repo": "fastapi",
+      "path": "tests/test_stream_endpoint.py",
+      "tier": "minor"
+    },
+    {
+      "comment_id": "4374346581",
+      "repo": "fastapi",
+      "path": "app/routers/query.py",
+      "tier": "moderate"
+    },
+    {
+      "comment_id": "4374346586",
+      "repo": "fastapi",
+      "path": "tests/test_stream_endpoint.py",
+      "tier": "moderate"
+    },
+    {
+      "comment_id": "4374346590",
+      "repo": "fastapi",
+      "path": "app/streaming.py",
+      "tier": "moderate"
+    },
+    {
+      "comment_id": "4374346608",
+      "repo": "fastapi",
+      "path": "app/routers/query.py",
+      "tier": "moderate"
+    }
+  ]
+}
